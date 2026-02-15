@@ -1,4 +1,3 @@
 wlogout
-wlogout-debug
 zen-browser-bin
-clipse-bin
+clipse
