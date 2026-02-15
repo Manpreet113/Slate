@@ -62,24 +62,34 @@ echo "[Slate] Discovering root partition UUID..."
 ROOT_DEVICE=$(findmnt / -no SOURCE)
 
 # The LUKS / Device Mapper Intercept
-if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
-    echo "[Slate] Virtual mapped device detected. Tracing to physical parent..."
-    
-    DM_NAME=$(basename "$ROOT_DEVICE")
-
-    # Extract the parent kernel name (e.g., vda2)
-    PARENT_NAME=$(lsblk -nro NAME,PKNAME | awk -v dev="$DM_NAME" '$1 == dev {print $2}')
-    
-    if [ -z "$PARENT_NAME" ]; then
-        echo "[Error] Could not resolve physical parent for $ROOT_DEVICE."
-        exit 1
-    fi
-    
-    # Reconstruct the physical path
-    ROOT_DEVICE="/dev/$PARENT_NAME"
-    echo "[Slate] Physical device resolved to: $ROOT_DEVICE"
+if [[ "$ROOT_DEVICE" != /dev/mapper/* ]]; then
+    echo "[Error] Hardware mismatch. Root device is $ROOT_DEVICE."
+    echo "[Error] Slate strictly requires a LUKS encrypted root partition."
+    echo "[Error] Did you forget to enable encryption during archinstall?"
+    exit 1
 fi
 
+echo "[Slate] Decrypted vault detected. Tracing to physical parent..."
+DM_NAME=$(basename "$ROOT_DEVICE")
+
+# 2. The Extraction
+PARENT_NAME=$(lsblk -nro NAME,PKNAME | awk -v dev="$DM_NAME" '$1 == dev {print $2}')
+
+if [ -z "$PARENT_NAME" ]; then
+    echo "[Error] Could not resolve physical parent for $ROOT_DEVICE."
+    exit 1
+fi
+
+# 3. The Resolution
+ROOT_DEVICE="/dev/$PARENT_NAME"
+ROOT_UUID=$(sudo blkid -s PARTUUID -o value "$ROOT_DEVICE")
+
+if [ -z "$ROOT_UUID" ]; then
+    echo "[Error] Could not extract PARTUUID from $ROOT_DEVICE."
+    exit 1
+fi
+
+echo "[Slate] Physical encrypted partition is $ROOT_DEVICE (UUID: $ROOT_UUID)."
 # Now query the actual hardware, whether it was direct or resolved
 ROOT_UUID=$(sudo blkid -s PARTUUID -o value "$ROOT_DEVICE")
 
