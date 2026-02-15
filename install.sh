@@ -16,7 +16,7 @@ echo "[Slate] Synchronizing repositories and updating system..."
 sudo pacman -Syu --noconfirm
 
 echo "[Slate] Installing official packages..."
-grep -vE '^\s*#|^\s*$' "$PACMAN_LIST" | sudo pacman -S --needed --noconfirm -
+grep -vE '^\s*#|^\s*$' "$PACMAN_LIST" | sudo pacman -Syu --needed --noconfirm -
 
 # Evaluate the AUR helper situation and bootstrap yay-bin if needed
 if ! command -v yay >/dev/null 2>&1; then
@@ -28,7 +28,7 @@ if ! command -v yay >/dev/null 2>&1; then
 fi
 
 echo "[Slate] Installing AUR packages..."
-grep -vE '^\s*#|^\s*$' "$AUR_LIST" | yay -S --needed --noconfirm -
+grep -vE '^\s*#|^\s*$' "$AUR_LIST" | yay -Sy --needed --noconfirm -
 
 echo "[Slate] Linking dotfiles..."
 mkdir -p ~/.config
@@ -60,7 +60,33 @@ sudo cp -a "$SYSTEM_DIR/mono-steel/." /usr/share/plymouth/themes/mono-steel/
 
 echo "[Slate] Discovering root partition UUID..."
 ROOT_DEVICE=$(findmnt / -no SOURCE)
+
+# The LUKS / Device Mapper Intercept
+if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
+    echo "[Slate] Virtual mapped device detected. Tracing to physical parent..."
+    
+    # Extract the parent kernel name (e.g., vda2)
+    PARENT_NAME=$(lsblk -no PKNAME "$ROOT_DEVICE")
+    
+    if [ -z "$PARENT_NAME" ]; then
+        echo "[Error] Could not resolve physical parent for $ROOT_DEVICE."
+        exit 1
+    fi
+    
+    # Reconstruct the physical path
+    ROOT_DEVICE="/dev/$PARENT_NAME"
+    echo "[Slate] Physical device resolved to: $ROOT_DEVICE"
+fi
+
+# Now query the actual hardware, whether it was direct or resolved
 ROOT_UUID=$(sudo blkid -s PARTUUID -o value "$ROOT_DEVICE")
+
+if [ -z "$ROOT_UUID" ]; then
+    echo "[Error] Could not determine root PARTUUID. Aborting bootloader patch to prevent bricking."
+    exit 1
+fi
+
+echo "[Slate] Root PARTUUID is $ROOT_UUID."
 
 if [ -z "$ROOT_UUID" ]; then
     echo "[Error] Could not determine root PARTUUID. Aborting bootloader patch to prevent bricking."
