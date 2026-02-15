@@ -1,0 +1,2 @@
+Slate is a minimal Arch + Hyprland system layer focused on dark monochrome aesthetics and keyboard-first workflow.
+It assumes installation via archinstall and handles configuration, theming, and reproducibility.

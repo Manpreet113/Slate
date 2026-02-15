@@ -1,0 +1,6 @@
+plymouth-theme-monoarch
+wlogout
+wlogout-debug
+yay
+yay-debug
+zen-browser-bin

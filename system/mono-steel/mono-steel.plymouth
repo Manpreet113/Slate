@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=MonoSteel
+Description=MonoSteel theme by Manpreet
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/mono-steel/images
+ScriptFile=/usr/share/plymouth/themes/mono-steel/mono-steel.script
