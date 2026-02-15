@@ -65,8 +65,10 @@ ROOT_DEVICE=$(findmnt / -no SOURCE)
 if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
     echo "[Slate] Virtual mapped device detected. Tracing to physical parent..."
     
+    DM_NAME=$(basename "$ROOT_DEVICE")
+
     # Extract the parent kernel name (e.g., vda2)
-    PARENT_NAME=$(lsblk -no PKNAME "$ROOT_DEVICE")
+    PARENT_NAME=$(lsblk -nro NAME,PKNAME | awk -v dev="$DM_NAME" '$1 == dev {print $2}')
     
     if [ -z "$PARENT_NAME" ]; then
         echo "[Error] Could not resolve physical parent for $ROOT_DEVICE."
