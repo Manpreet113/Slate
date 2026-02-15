@@ -3,91 +3,95 @@
 # Fail fast on errors, unbound variables, and hidden pipe failures
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "[Slate] Running from: $REPO_DIR"
+# Dynamically discover the repository root regardless of folder name or execution path
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+echo "[Slate] Bootstrapping from: $REPO_DIR"
 
 PACMAN_LIST="$REPO_DIR/packages/pacman.txt"
 AUR_LIST="$REPO_DIR/packages/aur.txt"
 DOTFILES_DIR="$REPO_DIR/dotfiles"
 SYSTEM_DIR="$REPO_DIR/system"
+
 echo "[Slate] Synchronizing repositories and updating system..."
 sudo pacman -Syu --noconfirm
 
 echo "[Slate] Installing official packages..."
-# Strip out comments and empty lines before passing to pacman
 grep -vE '^\s*#|^\s*$' "$PACMAN_LIST" | sudo pacman -S --needed --noconfirm -
 
-# Evaluate the AUR helper situation
-if command -v yay >/dev/null 2>&1; then
-    AUR_HELPER="yay"
-elif command -v paru >/dev/null 2>&1; then
-    AUR_HELPER="paru"
-else
+# Evaluate the AUR helper situation and bootstrap yay-bin if needed
+if ! command -v yay >/dev/null 2>&1; then
     echo "[Slate] No AUR helper found. Bootstrapping yay-bin..."
     TMP_DIR=$(mktemp -d)
     git clone https://aur.archlinux.org/yay-bin.git "$TMP_DIR/yay-bin"
     (cd "$TMP_DIR/yay-bin" && makepkg -si --noconfirm)
     rm -rf "$TMP_DIR"
-    AUR_HELPER="yay"
 fi
 
-echo "[Slate] Installing AUR packages using $AUR_HELPER..."
-grep -vE '^\s*#|^\s*$' "$AUR_LIST" | $AUR_HELPER -S --needed --noconfirm -
+echo "[Slate] Installing AUR packages..."
+grep -vE '^\s*#|^\s*$' "$AUR_LIST" | yay -S --needed --noconfirm -
 
 echo "[Slate] Linking dotfiles..."
 mkdir -p ~/.config
 
 # Use -snf to prevent directory nesting if the script is run twice
-ln -snf "$REPO_DIR/dotfiles/hypr" ~/.config/hypr
-ln -snf "$REPO_DIR/dotfiles/waybar" ~/.config/waybar
-ln -snf "$REPO_DIR/dotfiles/wlogout" ~/.config/wlogout
-ln -snf "$REPO_DIR/dotfiles/mako" ~/.config/mako
-ln -snf "$REPO_DIR/dotfiles/ghostty" ~/.config/ghostty
-ln -snf "$REPO_DIR/dotfiles/rofi" ~/.config/rofi
+ln -snf "$DOTFILES_DIR/hypr" ~/.config/hypr
+ln -snf "$DOTFILES_DIR/waybar" ~/.config/waybar
+ln -snf "$DOTFILES_DIR/wlogout" ~/.config/wlogout
+ln -snf "$DOTFILES_DIR/mako" ~/.config/mako
+ln -snf "$DOTFILES_DIR/ghostty" ~/.config/ghostty
+ln -snf "$DOTFILES_DIR/rofi" ~/.config/rofi
+ln -snf "$DOTFILES_DIR/zsh/.zshrc" ~/.zshrc
+ln -snf "$DOTFILES_DIR/zsh/.zprofile" ~/.zprofile
 
-# Zsh configurations
-ln -snf "$REPO_DIR/dotfiles/zsh/.zshrc" ~/.zshrc
-ln -snf "$REPO_DIR/dotfiles/zsh/.zprofile" ~/.zprofile
+echo "[Slate] Verifying default shell..."
+if [ "${SHELL}" != "/usr/bin/zsh" ]; then
+    echo "[Slate] Changing default shell to zsh. You may be prompted for your password."
+    chsh -s /usr/bin/zsh
+else
+    echo "[Slate] zsh is already the default shell."
+fi
 
 echo "[Slate] Installing system configs..."
+sudo cp "$SYSTEM_DIR/mkinitcpio.conf" /etc/mkinitcpio.conf
 
-# Explicitly create destination folders before copying
-sudo mkdir -p /boot/limine
+# Install Plymouth theme safely
 sudo mkdir -p /usr/share/plymouth/themes/mono-steel
-
-echo "[Slate] Installing system configs..."
-
-# Explicitly create destination folders
-sudo mkdir -p /boot/limine
-sudo mkdir -p /usr/share/plymouth/themes/mono-steel
+sudo cp -a "$SYSTEM_DIR/mono-steel/." /usr/share/plymouth/themes/mono-steel/
 
 echo "[Slate] Discovering root partition UUID..."
-# Find the physical device mounted at /
 ROOT_DEVICE=$(findmnt / -no SOURCE)
-
-# Extract just the PARTUUID value
 ROOT_UUID=$(sudo blkid -s PARTUUID -o value "$ROOT_DEVICE")
 
-# Fail instantly if we didn't find a UUID
 if [ -z "$ROOT_UUID" ]; then
-    echo "[Error] Could not determine root PARTUUID. Aborting to prevent unbootable system."
+    echo "[Error] Could not determine root PARTUUID. Aborting bootloader patch to prevent bricking."
     exit 1
 fi
 
-echo "[Slate] Root PARTUUID is $ROOT_UUID. Patching limine.conf..."
+echo "[Slate] Root PARTUUID is $ROOT_UUID."
 
-# Copy the template to the boot directory
-sudo cp "$REPO_DIR/system/limine.conf" /boot/limine/
+# The Bootloader Switchboard
+if [ -d "/boot/limine" ] || [ -f "/boot/limine.conf" ]; then
+    echo "[Slate] Detected Limine. Patching limine.conf..."
+    sudo mkdir -p /boot/limine
+    sudo cp "$SYSTEM_DIR/limine.conf" /boot/limine/
+    sudo sed -i "s/{{ROOT_PARTUUID}}/$ROOT_UUID/g" /boot/limine/limine.conf
 
-# Use sed to swap the placeholder for the real UUID in place
-sudo sed -i "s/{{ROOT_PARTUUID}}/$ROOT_UUID/g" /boot/limine/limine.conf
-
-# Copy mkinitcpio and Plymouth configs
-sudo cp "$REPO_DIR/system/mkinitcpio.conf" /etc/
-sudo cp -a "$REPO_DIR/system/mono-steel/." /usr/share/plymouth/themes/mono-steel/
+elif [ -d "/boot/loader/entries" ]; then
+    echo "[Slate] Detected systemd-boot."
+    ENTRY_FILE=$(find /boot/loader/entries/ -name "*.conf" | grep -i "arch" | head -n 1)
+    
+    if [ -n "$ENTRY_FILE" ]; then
+        echo "[Slate] Patching systemd-boot entry: $ENTRY_FILE"
+        sudo sed -i -E "s/root=PARTUUID=[a-zA-Z0-9-]+/root=PARTUUID=$ROOT_UUID/g" "$ENTRY_FILE"
+    else
+        echo "[Warning] Found systemd-boot directory, but no Arch entry file to patch!"
+    fi
+else
+    echo "[Warning] Unknown bootloader. You will need to configure your boot parameters manually."
+fi
 
 echo "[Slate] Setting Plymouth theme to mono-steel and rebuilding initcpio..."
+# -R handles both setting the theme and running mkinitcpio
 sudo plymouth-set-default-theme -R mono-steel
 
 echo "[Slate] Done. Reboot to enter the void."
