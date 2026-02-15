@@ -3,11 +3,14 @@
 # Fail fast on errors, unbound variables, and hidden pipe failures
 set -euo pipefail
 
-# Absolute paths prevent execution errors depending on where the script is run from
-REPO_DIR="$HOME/Slate"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "[Slate] Running from: $REPO_DIR"
+
 PACMAN_LIST="$REPO_DIR/packages/pacman.txt"
 AUR_LIST="$REPO_DIR/packages/aur.txt"
-
+DOTFILES_DIR="$REPO_DIR/dotfiles"
+SYSTEM_DIR="$REPO_DIR/system"
 echo "[Slate] Synchronizing repositories and updating system..."
 sudo pacman -Syu --noconfirm
 
