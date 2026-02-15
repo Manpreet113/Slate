@@ -4,7 +4,6 @@ bat
 bluez
 bluez-utils
 brightnessctl
-cliphist
 code
 cups
 cups-pk-helper
@@ -39,7 +38,6 @@ pipewire-alsa
 pipewire-jack
 pipewire-pulse
 plymouth
-plymouth-theme-monoarch
 power-profiles-daemon
 rofi
 slurp
@@ -54,12 +52,8 @@ ttf-iosevka-nerd
 ttf-jetbrains-mono-nerd
 waybar
 wireplumber
-wlogout
 wpa_supplicant
 xdg-desktop-portal-hyprland
-yay
-yay-debug
-zen-browser-bin
 zoxide
 zram-generator
 zsh
