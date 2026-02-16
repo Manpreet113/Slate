@@ -1,62 +1,87 @@
 # Slate
 
-A reproducible, dark-monochrome Arch Linux and Hyprland configuration. 
+**Tool, not jailer.** A complete Arch Linux + Hyprland configuration manager with dynamic template rendering.
 
-This is not a flexible, one-size-fits-all setup script. It is an opinionated, keyboard-first environment that enforces specific architectural choices, most notably full-disk encryption.
+## Installation (Replaces install.sh!)
 
-## The Stack
+```bash
+git clone https://github.com/manpreet113/slate.git ~/Slate
+cd ~/Slate
+cargo build --release
+sudo ./target/release/slate install
+```
 
-* **OS:** Arch Linux
-* **Compositor:** Hyprland
-* **Terminal:** Ghostty
-* **Launcher:** Rofi (Custom Wayland configuration)
-* **Bar & Notifications:** Waybar & Mako
-* **Shell:** Zsh
-* **Bootloader:** Limine (or systemd-boot)
-* **Boot Splash:** Plymouth (Custom `mono-steel` theme)
+`slate install` does everything:
+- Updates system & installs all packages (pacman + AUR)
+- Bootstraps yay if needed
+- Patches your bootloader (Limine or systemd-boot) with detected PARTUUID
+- Installs Plymouth theme & mkinitcpio config
+- Sets zsh as default shell
+- Auto-detects hardware and generates configs
+- Sets up template-based config management
 
-## The Hard Requirement: LUKS Encryption
+After reboot, you're done!
 
-**Do not run this script on an unencrypted drive.** Slate's installation script is designed to dynamically trace virtual mapped devices (`/dev/mapper/root`) back to their physical hardware parents to inject the correct `PARTUUID` into your bootloader. 
+## Daily Usage
 
-If you install Arch Linux (via `archinstall` or manually) and do *not* set up a LUKS encrypted root partition, `install.sh` will violently reject your machine and exit. It will not attempt to guess your boot configuration.
+### Change Colors
+```bash
+slate set palette.accent "#5f87af"
+slate set palette.bg_void "#0a0a0a"
+```
 
-## Installation
+Waybar, Ghostty, and other apps reload automatically.
 
-1. Install Arch Linux. Ensure you enable LUKS encryption.
-2. Clone this repository:
-   ```bash
-   git clone [https://github.com/manpreet113/slate.git](https://github.com/manpreet113/slate.git) ~/Slate
-   cd ~/Slate
-3. Read the install.sh script. Never blindly execute a shell script that asks for sudo and touches your boot partition.
-4. Run the bootstrap:
-    ```bash
-    chmod +x install.sh
-    ./install.sh
+### Change Hardware Settings
+```bash
+slate set hardware.monitor_scale 1.5
+slate set hardware.font_family "JetBrains Mono"
+```
 
-## What the script actually does:
-* Installs official packages via pacman.
-* Bootstraps yay-bin and installs AUR packages.
-* Idempotently symlinks the dotfiles/ directory to ~/.config/.
-* Changes your default login shell to zsh.
-* Installs the custom mono-steel Plymouth theme.
-* Discovers your hardware PARTUUID and patches your limine.conf or systemd-boot entries.
-* Rebuilds mkinitcpio to ensure keyboard input is available before the encryption hook asks for your password.
+### Regenerate All Configs
+```bash
+slate reload
+```
 
-## Essential Keybindings
+### Edit Templates
+```bash
+nano ~/.config/slate/templates/waybar/style.css
+slate reload
+```
 
-Slate relies heavily on Vim-style navigation and SUPER (the Windows/Command key) as the main modifier.
-* `SUPER + Return`: Launch Ghostty
-* `SUPER + Space`: Launch Rofi
-* `SUPER + B`: Launch Zen Browser
-* `SUPER + E`: Launch Thunar
-* `SUPER + Q`: Kill active window
-* `SUPER + CTRL + Q`: Open Wlogout menu
-* `SUPER + H/J/K/L`: Move focus
-* `SUPER + SHIFT + H/J/K/L`: Move window
-* `SUPER + ALT + H/J/K/L`: Resize active window
-* `SUPER + V`: Open clipboard manager (clipse)
+## Commands
 
-## Troubleshooting
+- **`slate install`** - Full system setup (packages, bootloader, configs)
+- **`slate init`** - Initialize config management only (if already have packages)
+- **`slate reload`** - Regenerate all configs from templates
+- **`slate set <key> <value>`** - Update config value and auto-reload
+- **`slate check`** - Verify LUKS encryption and system requirements
 
-**If you end up in a tty loop after login, it is likely because your hardware requires a specific Wayland rendering flag (common in Virtual Machines). You can drop into tty2 (CTRL+ALT+F2) and investigate ~/.zprofile or ~/.zshrc.**
+## Architecture
+
+Slate uses template-based rendering with Tera:
+
+**State**: `~/.config/slate/slate.toml` (colors, hardware, app list)  
+**Templates**: `~/.config/slate/templates/` (your editable configs with `{{ variables }}`)  
+**Output**: `~/.config/` (generated configs - do not edit manually)
+
+Change a value → Slate renders templates → Writes atomically → Signals apps to reload
+
+## Philosophy
+
+1. **Explicit over implicit** - Template mappings in TOML, not hardcoded
+2. **Atomic all-or-nothing** - Render → write .tmp → rename all → signal all
+3. **One-command setup** - `slate install` does everything
+4. **Live updates** - `slate set palette.accent "#fff"` and watch it change
+
+## What Happened to install.sh?
+
+**Deprecated.** Use `slate install` instead.
+
+The Rust manager does everything install.sh did, plus:
+- Dynamic config generation from templates
+- Live color/font updates without editing files
+- Proper error handling and atomic operations
+- No fragile symlinks
+
+See [SLATE_MANAGER.md](./SLATE_MANAGER.md) for full documentation.
