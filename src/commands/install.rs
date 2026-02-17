@@ -46,8 +46,8 @@ pub fn install() -> Result<()> {
     const PACKAGES: &[&str] = &[
         // Base system
         "base", "base-devel", "linux", "linux-firmware", "intel-ucode",
-        // Boot & System
-        "efibootmgr", "limine", "plymouth", "sudo",
+        // Boot & System (systemd-boot + UKI, no Limine/Plymouth)
+        "efibootmgr", "systemd-ukify", "sudo",
         // Shell & CLI Tools
         "zsh", "bat", "eza", "fd", "zoxide", "starship", "jq", "less", "nano",
         // Hyprland & Wayland
@@ -122,19 +122,12 @@ pub fn install() -> Result<()> {
     }
     
     // 7. Detect hardware and patch bootloader
-    println!("\n[Slate] Discovering hardware configuration...");
-    let partuuid = detect_partuuid()?;
-    println!("  ✓ Root PARTUUID: {}", partuuid);
     
-    println!("\n[Slate] Patching bootloader...");
-    patch_bootloader(&system_dir, &partuuid)?;
+   // 7. Configure systemd-boot with UKI
+    println!("\n[Slate] Configuring systemd-boot with UKI...");
+    configure_systemd_boot()?;
     
-    // 8. Set Plymouth theme and rebuild initcpio
-    println!("\n[Slate] Setting Plymouth theme and rebuilding initcpio...");
-    run_command("sudo", &["plymouth-set-default-theme", "-R", "mono-steel"])?;
-    println!("  ✓ Plymouth theme set and initcpio rebuilt");
-    
-    // 9. Run slate init to set up config management
+    // 8. Run slate init to set up config management
     println!("\n[Slate] Initializing configuration management...");
     crate::commands::init()?;
     
@@ -274,5 +267,52 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
         bail!("Command failed: {} {}", cmd, args.join(" "));
     }
     
+    Ok(())
+}
+
+fn configure_systemd_boot() -> Result<()> {
+    use crate::config::SlateConfig;
+    use crate::template::TemplateEngine;
+    
+    //Load config to get PARTUUID
+    let home = home::home_dir().context("Could not determine home directory")?;
+    let config_path = home.join(".config/slate/slate.toml");
+    let templates_dir = home.join(".config/slate/templates");
+    
+    let config = SlateConfig::load(&config_path)?;
+    let engine = TemplateEngine::new(templates_dir.to_str().unwrap())?;
+    
+    // Step 1: Render and write systemd templates
+    println!("  → Writing kernel cmdline...");
+    let cmdline_content = engine.render("systemd/slate.conf", &config)?;
+    run_command("sudo", &["mkdir", "-p", "/etc/cmdline.d"])?;
+    write_with_sudo("/etc/cmdline.d/slate.conf", &cmdline_content)?;
+    
+    println!("  → Writing mkinitcpio config...");
+    let mkinitcpio_content = engine.render("systemd/mkinitcpio.conf", &config)?;
+    write_with_sudo("/etc/mkinitcpio.conf", &mkinitcpio_content)?;
+    
+    println!("  → Writing linux preset...");
+    let preset_content = engine.render("systemd/linux.preset", &config)?;
+    run_command("sudo", &["mkdir", "-p", "/etc/mkinitcpio.d"])?;
+    write_with_sudo("/etc/mkinitcpio.d/linux.preset", &preset_content)?;
+    
+    // Step 2: Build UKI (mkinitcpio will invoke ukify due to preset)
+    println!("  → Building Unified Kernel Image...");
+    run_command("sudo", &["mkinitcpio", "-p", "linux"])?;
+    
+    // Step 3: Install systemd-boot (auto-discovers slate.efi)
+    println!("  → Installing systemd-boot...");
+    run_command("sudo", &["bootctl", "install"])?;
+    
+    println!("  ✓ systemd-boot configured with encrypted UKI");
+    Ok(())
+}
+
+fn write_with_sudo(path: &str, content: &str) -> Result<()> {
+    let temp_file = std::env::temp_dir().join(format!("slate-{}", std::process::id()));
+    fs::write(&temp_file, content)?;
+    run_command("sudo", &["cp", temp_file.to_str().unwrap(), path])?;
+    fs::remove_file(&temp_file).ok();
     Ok(())
 }
