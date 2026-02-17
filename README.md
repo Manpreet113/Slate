@@ -8,8 +8,10 @@
 git clone https://github.com/manpreet113/slate.git ~/Slate
 cd ~/Slate
 cargo build --release
-sudo ./target/release/slate install
+./target/release/slate install
 ```
+
+**Note:** Do NOT run as root/sudo! The installer will prompt for sudo when needed.
 
 `slate install` does everything:
 - Updates system & installs all packages (pacman + AUR)

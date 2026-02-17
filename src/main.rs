@@ -2,6 +2,7 @@ mod color;
 mod config;
 mod template;
 mod commands;
+mod system;
 
 use clap::{Parser, Subcommand};
 

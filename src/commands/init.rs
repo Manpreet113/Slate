@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 pub fn init() -> Result<()> {
     println!("[Slate] Initializing configuration...");
@@ -92,55 +91,24 @@ pub fn init() -> Result<()> {
 }
 
 fn detect_partuuid() -> Result<String> {
-    // Same logic as check.rs
-    let root_device = Command::new("findmnt")
-        .args(["/", "-no", "SOURCE"])
-        .output()
-        .context("Failed to run findmnt")?;
+    use crate::system;
+
+    let root_device = system::get_root_device()
+        .context("Failed to detect root device")?;
     
-    let root_device = String::from_utf8_lossy(&root_device.stdout).trim().to_string();
-    
-    if !root_device.starts_with("/dev/mapper/") {
+    if !root_device.starts_with("/dev/mapper/") && !root_device.starts_with("/dev/dm-") {
         anyhow::bail!(
-            "Slate requires LUKS encryption. Root device is {}, not a /dev/mapper/* device",
+            "Slate requires LUKS encryption. Root device is {}, not a mapped device.",
             root_device
         );
     }
     
-    let dm_name = root_device.trim_start_matches("/dev/mapper/");
-    
-    let lsblk_output = Command::new("lsblk")
-        .args(["-nro", "NAME,PKNAME"])
-        .output()
-        .context("Failed to run lsblk")?;
-    
-    let lsblk_output = String::from_utf8_lossy(&lsblk_output.stdout);
-    
-    let parent_name = lsblk_output
-        .lines()
-        .find_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 && parts[0] == dm_name {
-                Some(parts[1].to_string())
-            } else {
-                None
-            }
-        })
-        .context("Could not resolve physical parent device")?;
-    
-    let physical_device = format!("/dev/{}", parent_name);
-    
-    let partuuid_output = Command::new("sudo")
-        .args(["blkid", "-s", "PARTUUID", "-o", "value", &physical_device])
-        .output()
-        .context("Failed to run blkid")?;
-    
-    let partuuid = String::from_utf8_lossy(&partuuid_output.stdout).trim().to_string();
-    
-    if partuuid.is_empty() {
-        anyhow::bail!("Could not extract PARTUUID from {}", physical_device);
-    }
-    
+    let physical_device = system::trace_to_physical_partition(&root_device)
+        .context("Failed to trace root device to physical partition")?;
+        
+    let partuuid = system::get_partuuid(&physical_device)
+        .context("Failed to get PARTUUID")?;
+        
     Ok(partuuid)
 }
 
