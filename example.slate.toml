@@ -1,5 +1,6 @@
 [palette]
 bg_void = "#0b0c10"
+bg_void_transparent = "#0b0c1099"
 foreground = "#aeb3c2"
 accent = "#ffffff"
 
@@ -168,6 +169,21 @@ name = "gtk-4"
 enabled = true
 template_path = "gtk-4.0/settings.ini"
 config_path = "gtk-4.0/settings.ini"
+reload_signal = { type = "none" }
+
+# Zsh configuration
+[[apps]]
+name = "zshrc"
+enabled = true
+template_path = "zsh/.zshrc"
+config_path = "../.zshrc" # Relative to ~/.config/ -> ~/.zshrc
+reload_signal = { type = "none" }
+
+[[apps]]
+name = "zprofile"
+enabled = true
+template_path = "zsh/.zprofile"
+config_path = "../.zprofile" # Relative to ~/.config/ -> ~/.zprofile
 reload_signal = { type = "none" }
 
 # Limine bootloader

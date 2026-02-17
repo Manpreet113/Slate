@@ -8,7 +8,7 @@
 window {
     background-color: {
             {
-            palette.bg_void | css_rgba(60)
+            palette.bg_void_transparent | css_rgba
         }
     }
 

@@ -11,8 +11,7 @@ pub fn install() -> Result<()> {
     println!("[Slate] Full system installation starting...");
     println!("[Slate] This will install packages, configure bootloader, and set up system files.\n");
     
-    // Get repo directory
-    let repo_dir = env::current_dir()?.canonicalize()?;
+    crate::system::ensure_base_devel()?;
     
     // 1. System update
     println!("[Slate] Synchronizing repositories and updating system...");
@@ -20,39 +19,29 @@ pub fn install() -> Result<()> {
     
     // 2. Install official packages
     println!("\n[Slate] Installing official packages...");
-    let pacman_list = repo_dir.join("packages/pacman.txt");
     
-    if !pacman_list.exists() {
-        bail!("packages/pacman.txt not found in {}", repo_dir.display());
-    }
+    const PACMAN_PACKAGES: &[&str] = &[
+        "base", "base-devel", "bat", "bluez", "bluez-utils", "brightnessctl", "code", "cups", 
+        "cups-pk-helper", "efibootmgr", "eza", "fd", "ghostty", "git", "grim", "gst-plugin-pipewire", 
+        "hypridle", "hyprland", "hyprlauncher", "hyprlock", "hyprpaper", "hyprpolkitagent", 
+        "intel-ucode", "jq", "less", "libpulse", "limine", "linux", "linux-firmware", "mako", 
+        "nano", "networkmanager", "nwg-look", "papirus-icon-theme", "pipewire", "pipewire-alsa", 
+        "pipewire-jack", "pipewire-pulse", "plymouth", "power-profiles-daemon", "rofi", "slurp", 
+        "sof-firmware", "starship", "sudo", "swappy", "system-config-printer", "terminus-font", 
+        "thunar", "ttf-iosevka-nerd", "ttf-jetbrains-mono-nerd", "waybar", "wireplumber", 
+        "wpa_supplicant", "xdg-desktop-portal-hyprland", "zoxide", "zram-generator", "zsh"
+    ];
     
-    let packages = fs::read_to_string(&pacman_list)?
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join(" ");
-    
-    if !packages.is_empty() {
-        let status = Command::new("sudo")
-            .arg("pacman")
-            .arg("-S")
-            .arg("--needed")
-            .arg("--noconfirm")
-            .args(packages.split_whitespace())
-            .status()?;
-        
-        if !status.success() {
-            bail!("Failed to install official packages");
-        }
-    }
+    let mut pacman_args = vec!["-S", "--needed", "--noconfirm"];
+    pacman_args.extend(PACMAN_PACKAGES);
+    run_command("sudo", &pacman_args)?;
     
     // 3. Bootstrap yay if needed
     println!("\n[Slate] Checking for AUR helper...");
-    if Command::new("which").arg("yay").output()?.status.success() {
-        println!("  ✓ yay already installed");
-    } else {
+    if Command::new("which").arg("yay").output().is_err() {
         println!("  → Bootstrapping yay-bin...");
         let temp_dir = std::env::temp_dir().join("yay-bin-install");
+        if temp_dir.exists() { fs::remove_dir_all(&temp_dir)?; }
         fs::create_dir_all(&temp_dir)?;
         
         run_command("git", &[
@@ -72,32 +61,19 @@ pub fn install() -> Result<()> {
             bail!("Failed to bootstrap yay");
         }
         println!("  ✓ yay installed");
+    } else {
+        println!("  ✓ yay already installed");
     }
     
     // 4. Install AUR packages
     println!("\n[Slate] Installing AUR packages...");
-    let aur_list = repo_dir.join("packages/aur.txt");
+    const AUR_PACKAGES: &[&str] = &[
+        "wlogout", "zen-browser-bin", "clipse"
+    ];
     
-    if aur_list.exists() {
-        let aur_packages = fs::read_to_string(&aur_list)?
-            .lines()
-            .filter(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
-            .collect::<Vec<_>>()
-            .join(" ");
-        
-        if !aur_packages.is_empty() {
-            let status = Command::new("yay")
-                .arg("-S")
-                .arg("--needed")
-                .arg("--noconfirm")
-                .args(aur_packages.split_whitespace())
-                .status()?;
-            
-            if !status.success() {
-                println!("  ⚠ Some AUR packages failed to install");
-            }
-        }
-    }
+    let mut yay_args = vec!["-S", "--needed", "--noconfirm"];
+    yay_args.extend(AUR_PACKAGES);
+    run_command("yay", &yay_args)?;
     
     // 5. Install system configs
     println!("\n[Slate] Installing system configs...");

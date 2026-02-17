@@ -10,6 +10,7 @@ pub struct SlateConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Palette {
     pub bg_void: String,      // e.g., "#0b0c10"
+    pub bg_void_transparent: String, // e.g., "#0b0c1099"
     pub foreground: String,   // e.g., "#aeb3c2"
     pub accent: String,       // e.g., "#ffffff"
 }
