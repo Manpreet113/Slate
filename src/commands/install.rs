@@ -117,22 +117,11 @@ pub fn install() -> Result<()> {
         // Plymouth theme
         let plymouth_theme = system_dir.join("mono-steel");
         if plymouth_theme.exists() && plymouth_theme.is_dir() {
-            let dest_dir = "/usr/share/plymouth/themes/mono-steel";
-            run_command("sudo", &["mkdir", "-p", dest_dir])?;
+            let dest_dir = PathBuf::from("/usr/share/plymouth/themes/mono-steel");
+            run_command("sudo", &["mkdir", "-p", dest_dir.to_str().unwrap()])?;
             
-            // Copy each file in the directory (no shell glob needed)
-            for entry in fs::read_dir(&plymouth_theme)? {
-                let entry = entry?;
-                let source = entry.path();
-                let filename = entry.file_name();
-                let dest = format!("{}/{}", dest_dir, filename.to_string_lossy());
-                
-                run_command("sudo", &[
-                    "cp",
-                    source.to_str().unwrap(),
-                    &dest
-                ])?;
-            }
+            // Recursively copy directory contents
+            copy_dir_recursive_sudo(&plymouth_theme, &dest_dir)?;
             println!("  ✓ Installed Plymouth theme");
         }
     }
@@ -261,6 +250,32 @@ fn patch_bootloader(system_dir: &PathBuf, partuuid: &str) -> Result<()> {
         
     } else {
         println!("  ⚠ Unknown bootloader. You'll need to configure boot parameters manually.");
+    }
+    
+    Ok(())
+}
+
+fn copy_dir_recursive_sudo(src: &PathBuf, dst: &PathBuf) -> Result<()> {
+    // Ensure destination directory exists
+    run_command("sudo", &["mkdir", "-p", dst.to_str().unwrap()])?;
+    
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(&file_name);
+        
+        if src_path.is_dir() {
+            // Recursively copy subdirectory
+            copy_dir_recursive_sudo(&src_path, &dst_path)?;
+        } else {
+            // Copy file with sudo
+            run_command("sudo", &[
+                "cp",
+                src_path.to_str().unwrap(),
+                dst_path.to_str().unwrap()
+            ])?;
+        }
     }
     
     Ok(())
