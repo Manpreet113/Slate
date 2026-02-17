@@ -6,7 +6,7 @@ accent = "#ffffff"
 
 [hardware]
 monitor_scale = 1.0
-root_partuuid = "REPLACE_ME_RUN_SLATE_CHECK"
+root_uuid = "REPLACE_ME_RUN_SLATE_CHECK"
 font_family = "Iosevka Nerd Font"
 
 # Waybar style template

@@ -17,10 +17,10 @@ pub fn init() -> Result<()> {
     
     // 2. Auto-detect hardware
     println!("  → Detecting hardware configuration...");
-    let partuuid = detect_partuuid()?;
-    println!("    ✓ PARTUUID: {}", partuuid);
+    let uuid = detect_uuid()?;
+    println!("    ✓ LUKS UUID: {}", uuid);
     
-    // 3. Copy example config from repo and update PARTUUID
+    // 3. Copy example config from repo and update UUID
     println!("  → Generating slate.toml...");
     let repo_dir = env::current_dir()?.canonicalize()?;
     let example_config_path = repo_dir.join("example.slate.toml");
@@ -32,11 +32,11 @@ pub fn init() -> Result<()> {
         );
     }
     
-    // Read example config and update PARTUUID
+    // Read example config and update UUID
     let example_content = fs::read_to_string(&example_config_path)?;
     let updated_content = example_content.replace(
-        "root_partuuid = \"REPLACE_ME_RUN_SLATE_CHECK\"",
-        &format!("root_partuuid = \"{}\"", partuuid)
+        "root_uuid = \"REPLACE_ME_RUN_SLATE_CHECK\"",
+        &format!("root_uuid = \"{}\"", uuid)
     );
     
     fs::write(&config_path, updated_content)?;
@@ -68,7 +68,7 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
-fn detect_partuuid() -> Result<String> {
+fn detect_uuid() -> Result<String> {
     use crate::system;
 
     let root_device = system::get_root_device()
@@ -84,10 +84,10 @@ fn detect_partuuid() -> Result<String> {
     let physical_device = system::trace_to_physical_partition(&root_device)
         .context("Failed to trace root device to physical partition")?;
         
-    let partuuid = system::get_partuuid(&physical_device)
-        .context("Failed to get PARTUUID")?;
+    let uuid = system::get_uuid(&physical_device)
+        .context("Failed to get LUKS UUID")?;
         
-    Ok(partuuid)
+    Ok(uuid)
 }
 
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {

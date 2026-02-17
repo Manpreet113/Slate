@@ -18,7 +18,7 @@ pub struct Palette {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Hardware {
     pub monitor_scale: f32,
-    pub root_partuuid: String,
+    pub root_uuid: String,
     #[serde(default = "default_font")]
     pub font_family: String,
 }

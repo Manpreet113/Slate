@@ -154,3 +154,33 @@ pub fn get_partuuid(device_path: &str) -> Result<String> {
     
     bail!("Could not find PARTUUID for device {}", device_path)
 }
+
+/// Extract filesystem/LUKS UUID by scanning /dev/disk/by-uuid/
+pub fn get_uuid(device_path: &str) -> Result<String> {
+    let uuid_dir = Path::new("/dev/disk/by-uuid");
+    
+    if !uuid_dir.exists() {
+        bail!("/dev/disk/by-uuid/ does not exist - needed to resolve UUID");
+    }
+    
+    // Handle relative device paths or symlinks
+    let target_canon = fs::canonicalize(device_path)
+        .context(format!("Could not resolve device path {}", device_path))?;
+    
+    for entry in fs::read_dir(uuid_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        
+        // Resolve the link
+        if let Ok(link_target) = fs::read_link(&path) {
+            let full_link_path = uuid_dir.join(link_target);
+            if let Ok(canon_link) = fs::canonicalize(full_link_path) {
+                if canon_link == target_canon {
+                    return Ok(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    
+    bail!("Could not find UUID for device {}", device_path)
+}
