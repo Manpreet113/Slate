@@ -86,8 +86,9 @@ pub fn install() -> Result<()> {
     
     println!("  ✓ All packages installed");
     
-    // 5. Install system configs
+    // 4. Install system configs
     println!("\n[Slate] Installing system configs...");
+    let repo_dir = env::current_dir()?.canonicalize()?;
     let system_dir = repo_dir.join("system");
     
     if system_dir.exists() {
