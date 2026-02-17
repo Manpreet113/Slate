@@ -14,7 +14,9 @@ pub fn install() -> Result<()> {
     
     // 1. Bootstrap ax if needed
     println!("[Slate] Checking for ax package manager...");
-    if Command::new("which").arg("ax").output().is_err() {
+    let ax_path = PathBuf::from("/usr/local/bin/ax");
+    
+    if !ax_path.exists() {
         println!("  → Downloading ax from GitHub releases...");
         
         let temp_dir = std::env::temp_dir().join("ax-install");
@@ -36,9 +38,9 @@ pub fn install() -> Result<()> {
         run_command("sudo", &["mv", ax_binary.to_str().unwrap(), "/usr/local/bin/ax"])?;
         
         fs::remove_dir_all(&temp_dir).ok();
-        println!("  ✓ ax installed");
+        println!("  ✓ ax installed to /usr/local/bin/ax");
     } else {
-        println!("  ✓ ax already installed");
+        println!("  ✓ ax already installed at /usr/local/bin/ax");
     }
     
     // 2. System update
