@@ -1,4 +1,3 @@
-use crate::config::{App, Hardware, Palette, ReloadSignal, SlateConfig};
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
@@ -21,59 +20,38 @@ pub fn init() -> Result<()> {
     let partuuid = detect_partuuid()?;
     println!("    ✓ PARTUUID: {}", partuuid);
     
-    // 3. Generate default config
+    // 3. Copy example config from repo and update PARTUUID
     println!("  → Generating slate.toml...");
-    let config = SlateConfig {
-        palette: Palette {
-            bg_void: "#0b0c10".to_string(),
-            foreground: "#aeb3c2".to_string(),
-            accent: "#ffffff".to_string(),
-        },
-        hardware: Hardware {
-            monitor_scale: 1.0,
-            root_partuuid: partuuid,
-            font_family: "Iosevka Nerd Font".to_string(),
-        },
-        apps: vec![
-            App {
-                name: "waybar-style".to_string(),
-                enabled: true,
-                template_path: "waybar/style.css".to_string(),
-                config_path: "waybar/style.css".to_string(),
-                reload_signal: ReloadSignal::Signal { signal: "waybar".to_string() },
-            },
-            App {
-                name: "waybar-config".to_string(),
-                enabled: true,
-                template_path: "waybar/config".to_string(),
-                config_path: "waybar/config".to_string(),
-                reload_signal: ReloadSignal::Signal { signal: "waybar".to_string() },
-            },
-            App {
-                name: "ghostty".to_string(),
-                enabled: true,
-                template_path: "ghostty/config".to_string(),
-                config_path: "ghostty/config".to_string(),
-                reload_signal: ReloadSignal::None,
-            },
-        ],
-    };
+    let repo_dir = env::current_dir()?.canonicalize()?;
+    let example_config_path = repo_dir.join("example.slate.toml");
     
-    config.save(&config_path)?;
+    if !example_config_path.exists() {
+        anyhow::bail!(
+            "example.slate.toml not found in {}. Run slate init from the Slate repository directory.",
+            repo_dir.display()
+        );
+    }
+    
+    // Read example config and update PARTUUID
+    let example_content = fs::read_to_string(&example_config_path)?;
+    let updated_content = example_content.replace(
+        "root_partuuid = \"REPLACE_ME_RUN_SLATE_CHECK\"",
+        &format!("root_partuuid = \"{}\"", partuuid)
+    );
+    
+    fs::write(&config_path, updated_content)?;
     println!("    ✓ Saved to {}", config_path.display());
     
     // 4. Copy templates from repo
     println!("  → Copying templates...");
-    let repo_dir = env::current_dir()?.canonicalize()?;
     let repo_templates = repo_dir.join("templates");
     
     if !repo_templates.exists() {
-        println!("    ⚠ Warning: templates/ not found in current directory");
-        println!("    You'll need to manually copy templates to {}", templates_dir.display());
-    } else {
-        copy_dir_recursive(&repo_templates, &templates_dir)?;
-        println!("    ✓ Templates copied");
+        anyhow::bail!("templates/ not found in {}. Run slate init from the Slate repository directory.", repo_dir.display());
     }
+    
+    copy_dir_recursive(&repo_templates, &templates_dir)?;
+    println!("    ✓ All templates copied (24 app configs)");
     
     // 5. Run initial reload
     println!("\n[Slate] Running initial config generation...");
