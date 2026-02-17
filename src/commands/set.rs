@@ -26,11 +26,11 @@ pub fn set(config_path: &PathBuf, key: &str, value: &str, dry_run: bool) -> Resu
         ["hardware", "font_family"] => {
             config.hardware.font_family = value.to_string();
         },
-        ["hardware", "root_partuuid"] => {
-            config.hardware.root_partuuid = value.to_string();
+        ["hardware", "root_uuid"] => {
+            config.hardware.root_uuid = value.to_string();
         },
         _ => {
-            bail!("Unknown configuration key: {}\nValid keys:\n  palette.bg_void\n  palette.foreground\n  palette.accent\n  hardware.monitor_scale\n  hardware.font_family\n  hardware.root_partuuid", key);
+            bail!("Unknown configuration key: {}\nValid keys:\n  palette.bg_void\n  palette.foreground\n  palette.accent\n  hardware.monitor_scale\n  hardware.font_family\n  hardware.root_uuid", key);
         },
     }
     
