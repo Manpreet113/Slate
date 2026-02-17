@@ -12,36 +12,29 @@ pub fn install() -> Result<()> {
     println!("[Slate] This will install packages, configure bootloader, and set up system files.\n");
     
     
-    // 1. Bootstrap ax if needed
-    println!("[Slate] Checking for ax package manager...");
-    let ax_path = PathBuf::from("/usr/local/bin/ax");
+    // 1. Ensure ax is up-to-date (always download latest)
+    println!("[Slate] Installing/updating ax package manager...");
     
-    if !ax_path.exists() {
-        println!("  → Downloading ax from GitHub releases...");
-        
-        let temp_dir = std::env::temp_dir().join("ax-install");
-        if temp_dir.exists() { fs::remove_dir_all(&temp_dir)?; }
-        fs::create_dir_all(&temp_dir)?;
-        
-        let ax_binary = temp_dir.join("ax");
-        
-        // Download latest ax binary
-        run_command("curl", &[
-            "-L",
-            "https://github.com/manpreet113/ax/releases/latest/download/ax",
-            "-o",
-            ax_binary.to_str().unwrap()
-        ])?;
-        
-        // Make executable and move to /usr/local/bin
-        run_command("chmod", &["+x", ax_binary.to_str().unwrap()])?;
-        run_command("sudo", &["mv", ax_binary.to_str().unwrap(), "/usr/local/bin/ax"])?;
-        
-        fs::remove_dir_all(&temp_dir).ok();
-        println!("  ✓ ax installed to /usr/local/bin/ax");
-    } else {
-        println!("  ✓ ax already installed at /usr/local/bin/ax");
-    }
+    let temp_dir = std::env::temp_dir().join("ax-install");
+    if temp_dir.exists() { fs::remove_dir_all(&temp_dir)?; }
+    fs::create_dir_all(&temp_dir)?;
+    
+    let ax_binary = temp_dir.join("ax");
+    
+    // Download latest ax binary from GitHub releases
+    run_command("curl", &[
+        "-L",
+        "https://github.com/manpreet113/ax/releases/latest/download/ax",
+        "-o",
+        ax_binary.to_str().unwrap()
+    ])?;
+    
+    // Make executable and move to /usr/local/bin
+    run_command("chmod", &["+x", ax_binary.to_str().unwrap()])?;
+    run_command("sudo", &["mv", ax_binary.to_str().unwrap(), "/usr/local/bin/ax"])?;
+    
+    fs::remove_dir_all(&temp_dir).ok();
+    println!("  ✓ ax installed/updated to latest version");
     
     // 2. System update
     println!("\n[Slate] Synchronizing repositories and updating system...");
