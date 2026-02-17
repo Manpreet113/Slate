@@ -32,6 +32,30 @@ template_path = "ghostty/config"
 config_path = "ghostty/config"
 reload_signal = { type = "none" }
 
+# Mako notification daemon
+[[apps]]
+name = "mako"
+enabled = true
+template_path = "mako/config"
+config_path = "mako/config"
+reload_signal = { type = "makoctl" }
+
+# Rofi app launcher
+[[apps]]
+name = "rofi"
+enabled = true
+template_path = "rofi/config.rasi"
+config_path = "rofi/config.rasi"
+reload_signal = { type = "none" }
+
+# Hyprlock screen locker
+[[apps]]
+name = "hyprlock"
+enabled = true
+template_path = "hypr/hyprlock.conf"
+config_path = "hypr/hyprlock.conf"
+reload_signal = { type = "none" }
+
 # Limine bootloader
 [[apps]]
 name = "limine"
