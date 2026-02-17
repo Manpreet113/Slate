@@ -122,14 +122,13 @@ pub fn install() -> Result<()> {
     }
     
     // 7. Detect hardware and patch bootloader
-    
-   // 7. Configure systemd-boot with UKI
-    println!("\n[Slate] Configuring systemd-boot with UKI...");
-    configure_systemd_boot()?;
-    
-    // 8. Run slate init to set up config management
+    // 7. Run slate init to setup config and templates (Required for bootloader config)
     println!("\n[Slate] Initializing configuration management...");
     crate::commands::init()?;
+
+    // 8. Configure systemd-boot with UKI (Depends on slate.toml from init)
+    println!("\n[Slate] Configuring systemd-boot with UKI...");
+    configure_systemd_boot()?;
     
     println!("\n[Slate] Installation complete!");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
