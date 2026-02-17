@@ -116,14 +116,23 @@ pub fn install() -> Result<()> {
         
         // Plymouth theme
         let plymouth_theme = system_dir.join("mono-steel");
-        if plymouth_theme.exists() {
-            run_command("sudo", &["mkdir", "-p", "/usr/share/plymouth/themes/mono-steel"])?;
-            run_command("sudo", &[
-                "cp",
-                "-r",
-                &format!("{}/*", plymouth_theme.display()),
-                "/usr/share/plymouth/themes/mono-steel/"
-            ])?;
+        if plymouth_theme.exists() && plymouth_theme.is_dir() {
+            let dest_dir = "/usr/share/plymouth/themes/mono-steel";
+            run_command("sudo", &["mkdir", "-p", dest_dir])?;
+            
+            // Copy each file in the directory (no shell glob needed)
+            for entry in fs::read_dir(&plymouth_theme)? {
+                let entry = entry?;
+                let source = entry.path();
+                let filename = entry.file_name();
+                let dest = format!("{}/{}", dest_dir, filename.to_string_lossy());
+                
+                run_command("sudo", &[
+                    "cp",
+                    source.to_str().unwrap(),
+                    &dest
+                ])?;
+            }
             println!("  ✓ Installed Plymouth theme");
         }
     }
