@@ -56,6 +56,120 @@ template_path = "hypr/hyprlock.conf"
 config_path = "hypr/hyprlock.conf"
 reload_signal = { type = "none" }
 
+# Hypridle idle daemon
+[[apps]]
+name = "hypridle"
+enabled = true
+template_path = "hypr/hypridle.conf"
+config_path = "hypr/hypridle.conf"
+reload_signal = { type = "none" }
+
+# Hyprpaper wallpaper daemon
+[[apps]]
+name = "hyprpaper"
+enabled = true
+template_path = "hypr/hyprpaper.conf"
+config_path = "hypr/hyprpaper.conf"
+reload_signal = { type = "pkill", signal = "hyprpaper" }
+
+# Hyprland main config
+[[apps]]
+name = "hyprland"
+enabled = true
+template_path = "hypr/hyprland.conf"
+config_path = "hypr/hyprland.conf"
+reload_signal = { type = "hyprctl" }
+
+# Hyprland appearance (borders, colors)
+[[apps]]
+name = "hyprland-appearance"
+enabled = true
+template_path = "hypr/hyprland/appearance.conf"
+config_path = "hypr/hyprland/appearance.conf"
+reload_signal = { type = "hyprctl" }
+
+# Hyprland monitor config
+[[apps]]
+name = "hyprland-monitor"
+enabled = true
+template_path = "hypr/hyprland/monitor.conf"
+config_path = "hypr/hyprland/monitor.conf"
+reload_signal = { type = "hyprctl" }
+
+# Hyprland other subconfigs (static, no templating needed)
+[[apps]]
+name = "hyprland-env"
+enabled = true
+template_path = "hypr/hyprland/env.conf"
+config_path = "hypr/hyprland/env.conf"
+reload_signal = { type = "hyprctl" }
+
+[[apps]]
+name = "hyprland-input"
+enabled = true
+template_path = "hypr/hyprland/input.conf"
+config_path = "hypr/hyprland/input.conf"
+reload_signal = { type = "hyprctl" }
+
+[[apps]]
+name = "hyprland-layers"
+enabled = true
+template_path = "hypr/hyprland/layers.conf"
+config_path = "hypr/hyprland/layers.conf"
+reload_signal = { type = "hyprctl" }
+
+[[apps]]
+name = "hyprland-rules"
+enabled = true
+template_path = "hypr/hyprland/rules.conf"
+config_path = "hypr/hyprland/rules.conf"
+reload_signal = { type = "hyprctl" }
+
+[[apps]]
+name = "hyprland-binds"
+enabled = true
+template_path = "hypr/hyprland/binds.conf"
+config_path = "hypr/hyprland/binds.conf"
+reload_signal = { type = "hyprctl" }
+
+[[apps]]
+name = "hyprland-exec"
+enabled = true
+template_path = "hypr/hyprland/exec.conf"
+config_path = "hypr/hyprland/exec.conf"
+reload_signal = { type = "hyprctl" }
+
+# Wlogout logout menu
+[[apps]]
+name = "wlogout-style"
+enabled = true
+template_path = "wlogout/style.css"
+config_path = "wlogout/style.css"
+reload_signal = { type = "none" }
+
+[[apps]]
+name = "wlogout-layout"
+enabled = true
+template_path = "wlogout/layout"
+config_path = "wlogout/layout"
+reload_signal = { type = "none" }
+
+# GTK 3.0 theme
+[[apps]]
+name = "gtk-3"
+enabled = true
+template_path = "gtk-3.0/settings.ini"
+config_path = "gtk-3.0/settings.ini"
+reload_signal = { type = "none" }
+
+# GTK 4.0 theme
+[[apps]]
+name = "gtk-4"
+enabled = true
+template_path = "gtk-4.0/settings.ini"
+config_path = "gtk-4.0/settings.ini"
+reload_signal = { type = "none" }
+
 # Limine bootloader
 [[apps]]
 name = "limine"
