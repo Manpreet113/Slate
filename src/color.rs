@@ -69,4 +69,9 @@ impl Color {
     pub fn hex(&self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
+
+    /// Hyprland format: rgba(rrggbbaa)
+    pub fn hyprland(&self) -> String {
+        format!("rgba({:02x}{:02x}{:02x}{:02x})", self.r, self.g, self.b, self.a)
+    }
 }
