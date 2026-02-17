@@ -11,69 +11,80 @@ pub fn install() -> Result<()> {
     println!("[Slate] Full system installation starting...");
     println!("[Slate] This will install packages, configure bootloader, and set up system files.\n");
     
-    crate::system::ensure_base_devel()?;
     
-    // 1. System update
-    println!("[Slate] Synchronizing repositories and updating system...");
-    run_command("sudo", &["pacman", "-Syu", "--noconfirm"])?;
-    
-    // 2. Install official packages
-    println!("\n[Slate] Installing official packages...");
-    
-    const PACMAN_PACKAGES: &[&str] = &[
-        "base", "base-devel", "bat", "bluez", "bluez-utils", "brightnessctl", "code", "cups", 
-        "cups-pk-helper", "efibootmgr", "eza", "fd", "ghostty", "git", "grim", "gst-plugin-pipewire", 
-        "hypridle", "hyprland", "hyprlauncher", "hyprlock", "hyprpaper", "hyprpolkitagent", 
-        "intel-ucode", "jq", "less", "libpulse", "limine", "linux", "linux-firmware", "mako", 
-        "nano", "networkmanager", "nwg-look", "papirus-icon-theme", "pipewire", "pipewire-alsa", 
-        "pipewire-jack", "pipewire-pulse", "plymouth", "power-profiles-daemon", "rofi", "slurp", 
-        "sof-firmware", "starship", "sudo", "swappy", "system-config-printer", "terminus-font", 
-        "thunar", "ttf-iosevka-nerd", "ttf-jetbrains-mono-nerd", "waybar", "wireplumber", 
-        "wpa_supplicant", "xdg-desktop-portal-hyprland", "zoxide", "zram-generator", "zsh"
-    ];
-    
-    let mut pacman_args = vec!["-S", "--needed", "--noconfirm"];
-    pacman_args.extend(PACMAN_PACKAGES);
-    run_command("sudo", &pacman_args)?;
-    
-    // 3. Bootstrap yay if needed
-    println!("\n[Slate] Checking for AUR helper...");
-    if Command::new("which").arg("yay").output().is_err() {
-        println!("  → Bootstrapping yay-bin...");
-        let temp_dir = std::env::temp_dir().join("yay-bin-install");
+    // 1. Bootstrap ax if needed
+    println!("[Slate] Checking for ax package manager...");
+    if Command::new("which").arg("ax").output().is_err() {
+        println!("  → Downloading ax from GitHub releases...");
+        
+        let temp_dir = std::env::temp_dir().join("ax-install");
         if temp_dir.exists() { fs::remove_dir_all(&temp_dir)?; }
         fs::create_dir_all(&temp_dir)?;
         
-        run_command("git", &[
-            "clone",
-            "https://aur.archlinux.org/yay-bin.git",
-            temp_dir.to_str().unwrap()
+        let ax_binary = temp_dir.join("ax");
+        
+        // Download latest ax binary
+        run_command("curl", &[
+            "-L",
+            "https://github.com/manpreet113/ax/releases/latest/download/ax",
+            "-o",
+            ax_binary.to_str().unwrap()
         ])?;
         
-        let build_status = Command::new("makepkg")
-            .args(["-si", "--noconfirm"])
-            .current_dir(&temp_dir)
-            .status()?;
+        // Make executable and move to /usr/local/bin
+        run_command("chmod", &["+x", ax_binary.to_str().unwrap()])?;
+        run_command("sudo", &["mv", ax_binary.to_str().unwrap(), "/usr/local/bin/ax"])?;
         
         fs::remove_dir_all(&temp_dir).ok();
-        
-        if !build_status.success() {
-            bail!("Failed to bootstrap yay");
-        }
-        println!("  ✓ yay installed");
+        println!("  ✓ ax installed");
     } else {
-        println!("  ✓ yay already installed");
+        println!("  ✓ ax already installed");
     }
     
-    // 4. Install AUR packages
-    println!("\n[Slate] Installing AUR packages...");
-    const AUR_PACKAGES: &[&str] = &[
+    // 2. System update
+    println!("\n[Slate] Synchronizing repositories and updating system...");
+    run_command("ax", &["-Syu", "--noconfirm"])?;
+    
+    // 3. Install all packages (official + AUR)
+    println!("\n[Slate] Installing packages...");
+    
+    const PACKAGES: &[&str] = &[
+        // Base system
+        "base", "base-devel", "linux", "linux-firmware", "intel-ucode",
+        // Boot & System
+        "efibootmgr", "limine", "plymouth", "sudo",
+        // Shell & CLI Tools
+        "zsh", "bat", "eza", "fd", "zoxide", "starship", "jq", "less", "nano",
+        // Hyprland & Wayland
+        "hyprland", "hypridle", "hyprlock", "hyprpaper", "hyprlauncher", "hyprpolkitagent",
+        "xdg-desktop-portal-hyprland", "waybar", "rofi", "mako",
+        // Terminal & Apps
+        "ghostty", "thunar", "code",
+        // Audio & Video
+        "pipewire", "pipewire-alsa", "pipewire-jack", "pipewire-pulse", "wireplumber",
+        "gst-plugin-pipewire", "libpulse",
+        // Graphics & Screenshot
+        "grim", "slurp", "swappy",
+        // Bluetooth & Network
+        "bluez", "bluez-utils", "networkmanager", "wpa_supplicant",
+        // Power & Hardware
+        "brightnessctl", "power-profiles-daemon", "sof-firmware",
+        // Printing
+        "cups", "cups-pk-helper", "system-config-printer",
+        // Fonts & Themes
+        "ttf-iosevka-nerd", "ttf-jetbrains-mono-nerd", "terminus-font",
+        "papirus-icon-theme", "nwg-look",
+        // Utilities
+        "git", "zram-generator",
+        // AUR packages
         "wlogout", "zen-browser-bin", "clipse"
     ];
     
-    let mut yay_args = vec!["-S", "--needed", "--noconfirm"];
-    yay_args.extend(AUR_PACKAGES);
-    run_command("yay", &yay_args)?;
+    let mut ax_args = vec!["-S", "--needed", "--noconfirm"];
+    ax_args.extend(PACKAGES);
+    run_command("ax", &ax_args)?;
+    
+    println!("  ✓ All packages installed");
     
     // 5. Install system configs
     println!("\n[Slate] Installing system configs...");
