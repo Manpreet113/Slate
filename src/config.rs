@@ -81,7 +81,15 @@ pub enum ReloadSignal {
 impl SlateConfig {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: SlateConfig = toml::from_str(&content)?;
+        let mut config: SlateConfig = toml::from_str(&content)?;
+        
+        // Sanitize: ensure no empty/invalid values
+        if config.palette.bg_surface.is_empty() { config.palette.bg_surface = default_bg_surface(); }
+        if config.palette.bg_overlay.is_empty() { config.palette.bg_overlay = default_bg_overlay(); }
+        if config.palette.foreground_dim.is_empty() { config.palette.foreground_dim = default_foreground_dim(); }
+        if config.palette.accent_bright.is_empty() { config.palette.accent_bright = default_accent_bright(); }
+        if config.hardware.wallpaper.is_empty() { config.hardware.wallpaper = default_wallpaper(); }
+        
         Ok(config)
     }
 
