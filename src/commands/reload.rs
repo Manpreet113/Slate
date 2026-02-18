@@ -74,21 +74,29 @@ pub fn reload(config_path: &PathBuf, dry_run: bool) -> Result<()> {
     // Step 4: Fire all reload signals
     println!("\n[Slate] Propagating reload signals...");
     for (app, _) in renders {
-        send_reload_signal(&app.reload_signal, &app.name)?;
+        send_reload_signal(&app.reload_signal, &app.name, &config)?;
     }
     
     println!("\n[Slate] Reload complete.");
     Ok(())
 }
 
-fn send_reload_signal(signal: &ReloadSignal, app_name: &str) -> Result<()> {
+fn send_reload_signal(signal: &ReloadSignal, app_name: &str, config: &SlateConfig) -> Result<()> {
     match signal {
         ReloadSignal::Hyprctl => {
             println!("  → hyprctl reload");
             Command::new("hyprctl")
                 .arg("reload")
                 .output()
-                .ok(); // Don't fail if hyprland isn't running
+                .ok();
+        },
+        ReloadSignal::Hyprpaper => {
+            let wall = &config.hardware.wallpaper;
+            println!("  → hyprctl hyprpaper reload ,{}", wall);
+            Command::new("hyprctl")
+                .args(["hyprpaper", "reload", &format!(",{}", wall)])
+                .output()
+                .ok();
         },
         ReloadSignal::Signal { signal } => {
             println!("  → pkill -SIGUSR2 {}", signal);
@@ -96,14 +104,14 @@ fn send_reload_signal(signal: &ReloadSignal, app_name: &str) -> Result<()> {
                 .arg("-SIGUSR2")
                 .arg(signal)
                 .output()
-                .ok(); // Don't fail if app isn't running
+                .ok();
         },
         ReloadSignal::Makoctl => {
             println!("  → makoctl reload");
             Command::new("makoctl")
                 .arg("reload")
                 .output()
-                .ok(); // Don't fail if mako isn't running
+                .ok();
         },
         ReloadSignal::None => {
             println!("  → {} (no reload signal)", app_name);

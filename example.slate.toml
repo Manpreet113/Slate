@@ -77,7 +77,7 @@ name = "hyprpaper"
 enabled = true
 template_path = "hypr/hyprpaper.conf"
 config_path = "hypr/hyprpaper.conf"
-reload_signal = { type = "signal", signal = "hyprpaper" }
+reload_signal = { type = "hyprpaper" }
 
 # Hyprland main config
 [[apps]]

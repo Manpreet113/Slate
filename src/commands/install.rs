@@ -138,6 +138,28 @@ pub fn install() -> Result<()> {
     run_command("sudo", &["cp", current_exe.to_str().unwrap(), "/usr/local/bin/slate"])?;
     run_command("sudo", &["chmod", "+x", "/usr/local/bin/slate"])?;
     println!("  ✓ Installed to /usr/local/bin/slate");
+
+    // 10. Copy default wallpapers
+    println!("\n[Slate] Installing default wallpapers...");
+    let wall_dir = home::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
+        .join("Pictures/Wallpapers");
+    std::fs::create_dir_all(&wall_dir)?;
+    let repo_walls = std::env::current_dir()?.join("wallpapers");
+    if repo_walls.exists() {
+        for entry in std::fs::read_dir(&repo_walls)? {
+            let entry = entry?;
+            let dest = wall_dir.join(entry.file_name());
+            if !dest.exists() {
+                std::fs::copy(entry.path(), &dest)?;
+                println!("  ✓ {}", entry.file_name().to_string_lossy());
+            }
+        }
+    } else {
+        println!("  ⚠ No wallpapers/ directory found in repo");
+    }
+
+
     
     println!("\n[Slate] Installation complete!");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
