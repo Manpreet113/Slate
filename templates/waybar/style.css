@@ -15,9 +15,9 @@
 
 /* --- The Bar --- */
 window#waybar {
-    background-color: "{{ palette.bg_void | css_rgba }}";
-    color: "{{ palette.foreground | css_rgba }}";
-    border-bottom: 1px solid "{{ palette.bg_overlay }}";
+    background-color: {{ palette.bg_void | css_rgba }};
+    color: {{ palette.foreground | css_rgba }};
+    border-bottom: 1px solid {{ palette.bg_overlay }};
 }
 
 /* --- Module Pills --- */
@@ -38,7 +38,7 @@ window#waybar {
 
 /* --- Workspace Buttons --- */
 #workspaces button {
-    color: "{{ palette.foreground_dim }}";
+    color: {{ palette.foreground_dim }};
     background: transparent;
     padding: 0 8px;
     font-weight: bold;
@@ -47,25 +47,25 @@ window#waybar {
 }
 
 #workspaces button.active {
-    color: "{{ palette.accent | css_rgba }}";
-    border-bottom: 2px solid "{{ palette.accent | css_rgba }}";
+    color: {{ palette.accent | css_rgba }};
+    border-bottom: 2px solid {{ palette.accent | css_rgba }};
 }
 
 #workspaces button:hover {
-    color: "{{ palette.foreground | css_rgba }}";
+    color: {{ palette.foreground | css_rgba }};
     box-shadow: inherit;
     text-shadow: inherit;
 }
 
 /* --- Window Title --- */
 #window {
-    color: "{{ palette.foreground_dim }}";
+    color: {{ palette.foreground_dim }};
     font-style: italic;
 }
 
 /* --- Clock (Center) --- */
 #clock {
-    color: "{{ palette.foreground | css_rgba }}";
+    color: {{ palette.foreground | css_rgba }};
     font-weight: bold;
 }
 
@@ -77,18 +77,18 @@ window#waybar {
 #bluetooth,
 #network,
 #pulseaudio {
-    color: "{{ palette.foreground | css_rgba }}";
+    color: {{ palette.foreground | css_rgba }};
 }
 
 #bluetooth:hover,
 #network:hover,
 #pulseaudio:hover {
-    color: "{{ palette.accent_bright | css_rgba }}";
+    color: {{ palette.accent_bright | css_rgba }};
 }
 
 /* --- Battery States --- */
 #battery {
-    color: "{{ palette.foreground | css_rgba }}";
+    color: {{ palette.foreground | css_rgba }};
 }
 
 #battery.good {
@@ -116,7 +116,7 @@ window#waybar {
 
 /* --- Power Button --- */
 #custom-power {
-    color: "{{ palette.foreground_dim }}";
+    color: {{ palette.foreground_dim }};
     padding: 0 14px 0 8px;
     font-size: 15px;
 }
