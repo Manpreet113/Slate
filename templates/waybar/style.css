@@ -6,14 +6,7 @@
 * {
     border: none;
     border-radius: 0;
-
-    font-family: {
-            {
-            hardware.font_family
-        }
-    }
-
-    ;
+    font-family: "{{ hardware.font_family }}";
     font-size: 13px;
     min-height: 0;
     margin: 0;
