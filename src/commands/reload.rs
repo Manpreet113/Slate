@@ -91,11 +91,17 @@ fn send_reload_signal(signal: &ReloadSignal, app_name: &str, config: &SlateConfi
                 .ok();
         },
         ReloadSignal::Hyprpaper => {
-            let wall = &config.hardware.wallpaper;
-            println!("  → hyprctl hyprpaper reload ,{}", wall);
-            Command::new("hyprctl")
-                .args(["hyprpaper", "reload", &format!(",{}", wall)])
+            println!("  → restarting hyprpaper");
+            Command::new("pkill")
+                .arg("hyprpaper")
                 .output()
+                .ok();
+            
+            // Wait for clean exit
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            Command::new("hyprpaper")
+                .spawn()
                 .ok();
         },
         ReloadSignal::Signal { signal } => {
