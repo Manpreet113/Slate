@@ -1,0 +1,46 @@
+/* The Global Reset */
+* {
+    border: none;
+    border-radius: 0;
+    font-family: {{ hardware.font_family }};
+    font-size: 13px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+#window {
+    color: #888888;
+    font-style: italic; 
+    padding-left: 20px;
+}
+
+/* The Main Bar */
+window#waybar {
+    background-color: {{ palette.bg_void | css_rgba }};
+    color: {{ palette.foreground | css_rgba }};
+    border-bottom: 1px solid #333333;
+}
+
+/* Module Spacing */
+#workspaces, #window, #clock, #battery, #pulseaudio, #cpu, #memory, #network {
+    padding: 0px 15px;
+}
+
+/* Workspace Geometry */
+#workspaces button {
+    color: #555555;
+    background: transparent;
+    font-weight: bold;
+}
+
+#workspaces button.active {
+    color: {{ palette.accent | css_rgba }};
+    border-bottom: 2px solid {{ palette.accent | css_rgba }};
+}
+
+#workspaces button:hover {
+    box-shadow: inherit;
+    text-shadow: inherit;
+    color: {{ palette.foreground | css_rgba }};
+}

@@ -1,0 +1,102 @@
+* {
+    background-image: none;
+    font-family: "{{ hardware.font_family }}";
+    font-size: 18px;
+    box-shadow: none;
+}
+
+window {
+    background-color: {
+            {
+            palette.bg_void_transparent | css_rgba
+        }
+    }
+
+    ;
+}
+
+button {
+    color: {
+            {
+            palette.foreground | rofi
+        }
+    }
+
+    ;
+    background-color: #000000;
+    border: 2px solid #545454;
+    border-radius: 0;
+    padding: 20px 60px;
+    margin: 15px;
+    min-width: 220px;
+}
+
+button:hover {
+    border-color: {
+            {
+            palette.foreground | rofi
+        }
+    }
+
+    ;
+
+    color: {
+            {
+            palette.accent | rofi
+        }
+    }
+
+    ;
+}
+
+button:focus {
+    border-color: {
+            {
+            palette.accent | rofi
+        }
+    }
+
+    ;
+}
+
+#lock {
+    background-image: image(url("/usr/share/wlogout/icons/lock.png"), url("/usr/local/share/wlogout/icons/lock.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#logout {
+    background-image: image(url("/usr/share/wlogout/icons/logout.png"), url("/usr/local/share/wlogout/icons/logout.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#suspend {
+    background-image: image(url("/usr/share/wlogout/icons/suspend.png"), url("/usr/local/share/wlogout/icons/suspend.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#hibernate {
+    background-image: image(url("/usr/share/wlogout/icons/hibernate.png"), url("/usr/local/share/wlogout/icons/hibernate.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#shutdown {
+    background-image: image(url("/usr/share/wlogout/icons/shutdown.png"), url("/usr/local/share/wlogout/icons/shutdown.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#reboot {
+    background-image: image(url("/usr/share/wlogout/icons/reboot.png"), url("/usr/local/share/wlogout/icons/reboot.png"));
+    background-size: 120px 120px;
+    background-repeat: no-repeat;
+    background-position: center;
+}

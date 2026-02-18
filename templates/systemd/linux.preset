@@ -1,0 +1,9 @@
+# mkinitcpio preset file for the 'linux' package
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-linux"
+
+PRESETS=('default')
+
+# UKI output path
+default_uki="/boot/EFI/Linux/slate.efi"
+default_options="--splash=/dev/null"

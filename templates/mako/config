@@ -1,0 +1,29 @@
+# --- THE GEOMETRY ---
+layer=overlay
+anchor=top-right
+margin=20
+padding=15
+border-size=1
+border-radius=0
+width=350
+
+# --- THE TYPOGRAPHY ---
+font={{ hardware.font_family }} 11
+markup=1
+format=<b>%s</b>\n%b
+
+# --- THE MONO-STEEL PALETTE ---
+background-color={{ palette.bg_void | rofi }}
+text-color={{ palette.foreground | rofi }}
+border-color={{ palette.foreground | rofi }}
+progress-color={{ palette.accent | rofi }}
+
+# --- THE BEHAVIOR ---
+default-timeout=5000
+ignore-timeout=0
+
+# --- URGENCY OVERRIDES ---
+[urgency=critical]
+border-color={{ palette.accent | rofi }}
+text-color={{ palette.accent | rofi }}
+default-timeout=0
