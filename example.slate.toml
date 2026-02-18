@@ -13,7 +13,7 @@ accent_bright = "#7aa2cf"
 monitor_scale = 1.0
 root_uuid = "REPLACE_ME_RUN_SLATE_CHECK"
 font_family = "Iosevka Nerd Font"
-wallpaper = "~/Pictures/Wallpapers/slate-forest.png"
+wallpaper = "~/Pictures/Wallpapers/mist-forest.png"
 
 # Waybar style template
 [[apps]]

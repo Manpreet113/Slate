@@ -40,7 +40,7 @@ pub struct Hardware {
 }
 
 fn default_wallpaper() -> String {
-    "~/Pictures/Wallpapers/slate-forest.png".to_string()
+    "~/Pictures/Wallpapers/mist-forest.png".to_string()
 }
 
 fn default_font() -> String {
