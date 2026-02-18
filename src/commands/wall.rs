@@ -30,9 +30,13 @@ pub fn wall_set(config_path: &PathBuf, image_path: &str) -> Result<()> {
     std::fs::create_dir_all(&wall_dir)?;
     
     let dest = wall_dir.join(source.file_name().unwrap());
-    std::fs::copy(source, &dest)
-        .context("Failed to copy wallpaper")?;
-    println!("[Slate] Copied wallpaper to {}", dest.display());
+    if source != dest {
+        std::fs::copy(source, &dest)
+            .context("Failed to copy wallpaper")?;
+        println!("[Slate] Copied wallpaper to {}", dest.display());
+    } else {
+        println!("[Slate] Wallpaper is already in the target directory.");
+    }
     
     // Update config
     let wall_path = format!("~/Pictures/Wallpapers/{}", source.file_name().unwrap().to_str().unwrap());
