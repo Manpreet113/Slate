@@ -129,6 +129,13 @@ pub fn install() -> Result<()> {
     // 8. Configure systemd-boot with UKI (Depends on slate.toml from init)
     println!("\n[Slate] Configuring systemd-boot with UKI...");
     configure_systemd_boot()?;
+
+    // 9. Install slate binary system-wide
+    println!("\n[Slate] Installing slate binary...");
+    let current_exe = std::env::current_exe().context("Failed to locate slate binary")?;
+    run_command("sudo", &["cp", current_exe.to_str().unwrap(), "/usr/local/bin/slate"])?;
+    run_command("sudo", &["chmod", "+x", "/usr/local/bin/slate"])?;
+    println!("  ✓ Installed to /usr/local/bin/slate");
     
     println!("\n[Slate] Installation complete!");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
