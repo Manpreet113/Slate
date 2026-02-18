@@ -18,7 +18,9 @@ pub enum ColorError {
 impl std::fmt::Display for ColorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ColorError::InvalidFormat => write!(f, "Invalid color format (expected #RRGGBB or #RRGGBBAA)"),
+            ColorError::InvalidFormat => {
+                write!(f, "Invalid color format (expected #RRGGBB or #RRGGBBAA)")
+            }
             ColorError::ParseError(e) => write!(f, "Failed to parse hex value: {}", e),
         }
     }
@@ -41,21 +43,27 @@ impl Color {
                 let g = u8::from_str_radix(&hex[2..4], 16)?;
                 let b = u8::from_str_radix(&hex[4..6], 16)?;
                 (r, g, b, 255)
-            },
+            }
             8 => {
                 let r = u8::from_str_radix(&hex[0..2], 16)?;
                 let g = u8::from_str_radix(&hex[2..4], 16)?;
                 let b = u8::from_str_radix(&hex[4..6], 16)?;
                 let a = u8::from_str_radix(&hex[6..8], 16)?;
                 (r, g, b, a)
-            },
+            }
             _ => return Err(ColorError::InvalidFormat),
         };
         Ok(Self { r, g, b, a })
     }
 
     pub fn css_rgba(&self) -> String {
-        format!("rgba({}, {}, {}, {:.2})", self.r, self.g, self.b, self.a as f32 / 255.0)
+        format!(
+            "rgba({}, {}, {}, {:.2})",
+            self.r,
+            self.g,
+            self.b,
+            self.a as f32 / 255.0
+        )
     }
 
     pub fn rofi(&self) -> String {
@@ -72,6 +80,9 @@ impl Color {
 
     /// Hyprland format: rgba(rrggbbaa)
     pub fn hyprland(&self) -> String {
-        format!("rgba({:02x}{:02x}{:02x}{:02x})", self.r, self.g, self.b, self.a)
+        format!(
+            "rgba({:02x}{:02x}{:02x}{:02x})",
+            self.r, self.g, self.b, self.a
+        )
     }
 }

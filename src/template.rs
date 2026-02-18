@@ -11,26 +11,26 @@ impl TemplateEngine {
     pub fn new(templates_dir: &str) -> anyhow::Result<Self> {
         let pattern = format!("{}/**/*", templates_dir);
         let mut tera = Tera::new(&pattern)?;
-        
+
         // Register custom color filters
         tera.register_filter("css_rgba", Self::filter_css_rgba);
         tera.register_filter("rofi", Self::filter_rofi);
         tera.register_filter("plymouth", Self::filter_plymouth);
         tera.register_filter("hex", Self::filter_hex);
         tera.register_filter("hyprland", Self::filter_hyprland);
-        
+
         Ok(Self { tera })
     }
 
     pub fn render(&self, template_path: &str, config: &SlateConfig) -> anyhow::Result<String> {
         let mut context = Context::new();
-        
+
         // Inject palette
         context.insert("palette", &config.palette);
-        
+
         // Inject hardware
         context.insert("hardware", &config.hardware);
-        
+
         let result = self.tera.render(template_path, &context)?;
         Ok(result)
     }

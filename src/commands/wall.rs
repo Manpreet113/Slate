@@ -1,47 +1,53 @@
 use crate::config::SlateConfig;
 use anyhow::{bail, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-pub fn wall_set(config_path: &PathBuf, image_path: &str) -> Result<()> {
+pub fn wall_set(config_path: &Path, image_path: &str) -> Result<()> {
     // Expand ~ to home directory
     let expanded = shellexpand::tilde(image_path);
     let source = Path::new(expanded.as_ref());
-    
+
     if !source.exists() {
         bail!("Wallpaper not found: {}", source.display());
     }
-    
+
     // Ensure it's an image
-    let ext = source.extension()
+    let ext = source
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     if !["png", "jpg", "jpeg", "webp", "bmp"].contains(&ext.as_str()) {
-        bail!("Unsupported image format: .{}\nSupported: png, jpg, jpeg, webp, bmp", ext);
+        bail!(
+            "Unsupported image format: .{}\nSupported: png, jpg, jpeg, webp, bmp",
+            ext
+        );
     }
-    
+
     let mut config = SlateConfig::load(config_path)?;
-    
+
     // Copy to standard location
-    let home = home::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let home =
+        home::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     let wall_dir = home.join("Pictures/Wallpapers");
     std::fs::create_dir_all(&wall_dir)?;
-    
+
     let dest = wall_dir.join(source.file_name().unwrap());
     if source != dest {
-        std::fs::copy(source, &dest)
-            .context("Failed to copy wallpaper")?;
+        std::fs::copy(source, &dest).context("Failed to copy wallpaper")?;
         println!("[Slate] Copied wallpaper to {}", dest.display());
     } else {
         println!("[Slate] Wallpaper is already in the target directory.");
     }
-    
+
     // Update config
-    let wall_path = format!("~/Pictures/Wallpapers/{}", source.file_name().unwrap().to_str().unwrap());
+    let wall_path = format!(
+        "~/Pictures/Wallpapers/{}",
+        source.file_name().unwrap().to_str().unwrap()
+    );
     config.hardware.wallpaper = wall_path.clone();
-    
+
     // If matugen mode, regenerate palette
     if config.palette.mode == "matugen" {
         println!("[Slate] Generating palette from wallpaper (matugen)...");
@@ -62,14 +68,14 @@ pub fn wall_set(config_path: &PathBuf, image_path: &str) -> Result<()> {
             }
         }
     }
-    
+
     config.save(config_path)?;
     println!("  ✓ Updated slate.toml");
-    
+
     // Trigger reload to apply everywhere
     println!("\n[Slate] Applying changes...");
     crate::commands::reload(config_path, false)?;
-    
+
     Ok(())
 }
 
@@ -85,30 +91,38 @@ struct MatugenPalette {
 
 fn generate_palette_from_wallpaper(image_path: &str) -> Result<MatugenPalette> {
     let output = Command::new("matugen")
-        .args(["image", image_path, "--json", "hex", "-t", "scheme-tonal-spot"])
+        .args([
+            "image",
+            image_path,
+            "--json",
+            "hex",
+            "-t",
+            "scheme-tonal-spot",
+        ])
         .output()
         .context("Failed to run matugen. Is it installed?")?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("matugen exited with error: {}", stderr);
     }
-    
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("Failed to parse matugen JSON output")?;
-    
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("Failed to parse matugen JSON output")?;
+
     // matugen outputs { "colors": { "dark": { "surface": "#xxx", ... } } }
-    let dark = json.get("colors")
+    let dark = json
+        .get("colors")
         .and_then(|c| c.get("dark"))
         .ok_or_else(|| anyhow::anyhow!("matugen output missing colors.dark"))?;
-    
+
     let get_color = |key: &str| -> String {
         dark.get(key)
             .and_then(|v| v.as_str())
             .unwrap_or("#000000")
             .to_string()
     };
-    
+
     Ok(MatugenPalette {
         bg_void: get_color("surface"),
         bg_surface: get_color("surface_container"),

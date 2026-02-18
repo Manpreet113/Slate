@@ -10,19 +10,19 @@ pub struct SlateConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Palette {
     #[serde(default = "default_palette_mode")]
-    pub mode: String,                // "manual" or "matugen"
+    pub mode: String, // "manual" or "matugen"
     pub bg_void: String,             // Darkest background
     pub bg_void_transparent: String, // Background with alpha
     #[serde(default = "default_bg_surface")]
-    pub bg_surface: String,          // Card/input surface
+    pub bg_surface: String, // Card/input surface
     #[serde(default = "default_bg_overlay")]
-    pub bg_overlay: String,          // Overlay/hover layer
+    pub bg_overlay: String, // Overlay/hover layer
     pub foreground: String,          // Primary text
     #[serde(default = "default_foreground_dim")]
-    pub foreground_dim: String,      // Dimmed/inactive text
+    pub foreground_dim: String, // Dimmed/inactive text
     pub accent: String,              // Primary accent
     #[serde(default = "default_accent_bright")]
-    pub accent_bright: String,       // Bright accent (hover)
+    pub accent_bright: String, // Bright accent (hover)
 }
 
 fn default_palette_mode() -> String {
@@ -63,8 +63,8 @@ fn default_font() -> String {
 pub struct App {
     pub name: String,
     pub enabled: bool,
-    pub template_path: String,   // e.g., "waybar/style.css"
-    pub config_path: String,     // e.g., "waybar/style.css"
+    pub template_path: String, // e.g., "waybar/style.css"
+    pub config_path: String,   // e.g., "waybar/style.css"
     pub reload_signal: ReloadSignal,
 }
 
@@ -82,14 +82,24 @@ impl SlateConfig {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let mut config: SlateConfig = toml::from_str(&content)?;
-        
+
         // Sanitize: ensure no empty/invalid values
-        if config.palette.bg_surface.is_empty() { config.palette.bg_surface = default_bg_surface(); }
-        if config.palette.bg_overlay.is_empty() { config.palette.bg_overlay = default_bg_overlay(); }
-        if config.palette.foreground_dim.is_empty() { config.palette.foreground_dim = default_foreground_dim(); }
-        if config.palette.accent_bright.is_empty() { config.palette.accent_bright = default_accent_bright(); }
-        if config.hardware.wallpaper.is_empty() { config.hardware.wallpaper = default_wallpaper(); }
-        
+        if config.palette.bg_surface.is_empty() {
+            config.palette.bg_surface = default_bg_surface();
+        }
+        if config.palette.bg_overlay.is_empty() {
+            config.palette.bg_overlay = default_bg_overlay();
+        }
+        if config.palette.foreground_dim.is_empty() {
+            config.palette.foreground_dim = default_foreground_dim();
+        }
+        if config.palette.accent_bright.is_empty() {
+            config.palette.accent_bright = default_accent_bright();
+        }
+        if config.hardware.wallpaper.is_empty() {
+            config.hardware.wallpaper = default_wallpaper();
+        }
+
         Ok(config)
     }
 
@@ -100,10 +110,5 @@ impl SlateConfig {
         }
         std::fs::write(path, content)?;
         Ok(())
-    }
-
-    /// Returns the wallpaper path with ~ expanded to the absolute home path
-    pub fn expanded_wallpaper(&self) -> String {
-        shellexpand::tilde(&self.hardware.wallpaper).to_string()
     }
 }
