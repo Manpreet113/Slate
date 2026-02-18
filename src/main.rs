@@ -41,6 +41,21 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    
+    /// Wallpaper management
+    Wall {
+        #[command(subcommand)]
+        action: WallAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WallAction {
+    /// Set a wallpaper and optionally regenerate palette
+    Set {
+        /// Path to the wallpaper image
+        path: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -77,6 +92,18 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
             commands::set(&config_path, &key, &value, dry_run)?;
+        },
+        Commands::Wall { action } => {
+            if !config_path.exists() {
+                eprintln!("[Slate] Config not found!");
+                eprintln!("Run 'slate init' to set up Slate for the first time.");
+                std::process::exit(1);
+            }
+            match action {
+                WallAction::Set { path } => {
+                    commands::wall_set(&config_path, &path)?;
+                }
+            }
         },
     }
     

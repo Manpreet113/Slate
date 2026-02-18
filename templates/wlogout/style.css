@@ -18,23 +18,38 @@ window {
 button {
     color: {
             {
-            palette.foreground | rofi
+            palette.foreground | css_rgba
         }
     }
 
     ;
-    background-color: #000000;
-    border: 2px solid #545454;
+
+    background-color: {
+            {
+            palette.bg_surface
+        }
+    }
+
+    ;
+
+    border: 2px solid {
+            {
+            palette.bg_overlay
+        }
+    }
+
+    ;
     border-radius: 0;
     padding: 20px 60px;
     margin: 15px;
     min-width: 220px;
+    transition: all 0.2s ease;
 }
 
 button:hover {
     border-color: {
             {
-            palette.foreground | rofi
+            palette.accent | css_rgba
         }
     }
 
@@ -42,7 +57,15 @@ button:hover {
 
     color: {
             {
-            palette.accent | rofi
+            palette.accent | css_rgba
+        }
+    }
+
+    ;
+
+    background-color: {
+            {
+            palette.bg_overlay
         }
     }
 
@@ -52,7 +75,7 @@ button:hover {
 button:focus {
     border-color: {
             {
-            palette.accent | rofi
+            palette.accent_bright | css_rgba
         }
     }
 

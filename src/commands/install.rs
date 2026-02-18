@@ -59,7 +59,9 @@ pub fn install() -> Result<()> {
         "pipewire", "pipewire-alsa", "pipewire-jack", "pipewire-pulse", "wireplumber",
         "gst-plugin-pipewire", "libpulse",
         // Graphics & Screenshot
-        "grim", "slurp", "swappy",
+        "grim", "slurp", "swappy", "wl-clipboard",
+        // Theme generation
+        "matugen",
         // Bluetooth & Network
         "bluez", "bluez-utils", "networkmanager", "wpa_supplicant",
         // Power & Hardware

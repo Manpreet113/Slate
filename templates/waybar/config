@@ -1,12 +1,18 @@
 {
     "layer": "top",
     "position": "top",
-    "height": 30,
+    "height": 36,
     "spacing": 0,
-    
-   "modules-left": ["hyprland/workspaces", "hyprland/window"],
+
+    "modules-left": ["hyprland/workspaces", "hyprland/window"],
     "modules-center": ["clock"],
-    "modules-right": ["cpu", "memory", "network", "pulseaudio", "battery"],
+    "modules-right": ["tray", "bluetooth", "network", "pulseaudio", "battery", "custom/power"],
+
+    "hyprland/workspaces": {
+        "format": "{name}",
+        "disable-scroll": true,
+        "all-outputs": true
+    },
 
     "hyprland/window": {
         "format": "{title}",
@@ -14,47 +20,59 @@
         "separate-outputs": true
     },
 
-    "cpu": {
-        "interval": 2,
-        "format": "CPU {usage}%"
+    "clock": {
+        "format": "  {:%H:%M}",
+        "format-alt": "  {:%A, %d %B %Y · W%V}",
+        "tooltip-format": "{:%A, %d %B %Y\n\tWeek %V}",
+        "interval": 60
     },
 
-    "memory": {
-        "interval": 2,
-        "format": "RAM {percentage}%"
+    "tray": {
+        "icon-size": 16,
+        "spacing": 8
     },
 
-  "network": {
-    "format-wifi": "NET {essid}",
-    "format-ethernet": "LAN",
-    "format-disconnected": "OFF",
-    "tooltip": true
-  },
-    "hyprland/workspaces": {
-        "format": "{name}",
-        "disable-scroll": true,
-        "all-outputs": true
+    "bluetooth": {
+        "format": "󰂯",
+        "format-connected": "󰂱 {device_alias}",
+        "format-disabled": "󰂲",
+        "tooltip-format": "{controller_alias}\n{num_connections} connected",
+        "on-click": "blueman-manager"
     },
 
-  "clock": {
-  "format": "{:%H:%M}",
-  "format-alt": "{:%A, %d %B %Y | W%V}",
-  "tooltip-format": "{:%A, %d %B %Y\n\tWeek %V}",
-  "interval": 60
-  },
-
-    "battery": {
-        "states": {
-            "warning": 30,
-            "critical": 15
-        },
-        "format": "BAT {capacity}%",
-        "format-charging": "CHR {capacity}%",
-        "format-plugged": "PLG {capacity}%"
+    "network": {
+        "format-wifi": "  {essid}",
+        "format-ethernet": "󰈀  LAN",
+        "format-disconnected": "󰤭  OFF",
+        "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}",
+        "tooltip-format-ethernet": "{ifname}\n{ipaddr}",
+        "on-click": "nm-connection-editor"
     },
 
     "pulseaudio": {
-        "format": "VOL {volume}%",
-        "format-muted": "MUTED"
+        "format": "{icon}  {volume}%",
+        "format-muted": "󰝟  MUTED",
+        "format-icons": {
+            "default": ["", "", ""]
+        },
+        "on-click": "pavucontrol"
+    },
+
+    "battery": {
+        "states": {
+            "good": 80,
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{icon}  {capacity}%",
+        "format-charging": "󰂄  {capacity}%",
+        "format-plugged": "  {capacity}%",
+        "format-icons": ["", "", "", "", ""]
+    },
+
+    "custom/power": {
+        "format": "⏻",
+        "tooltip": false,
+        "on-click": "wlogout"
     }
 }

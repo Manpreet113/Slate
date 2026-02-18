@@ -12,10 +12,10 @@ font={{ hardware.font_family }} 11
 markup=1
 format=<b>%s</b>\n%b
 
-# --- THE MONO-STEEL PALETTE ---
-background-color={{ palette.bg_void | rofi }}
+# --- THE PALETTE ---
+background-color={{ palette.bg_surface | rofi }}
 text-color={{ palette.foreground | rofi }}
-border-color={{ palette.foreground | rofi }}
+border-color={{ palette.bg_overlay | rofi }}
 progress-color={{ palette.accent | rofi }}
 
 # --- THE BEHAVIOR ---

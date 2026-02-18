@@ -5,16 +5,17 @@ configuration {
     drun-display-format: "{name}";
 }
 * {
-    /* The Mono-Steel Palette */
+    /* Palette */
     bg-void: {{ palette.bg_void | rofi }};
-    bg-solid: {{ palette.bg_void }};
+    bg-surface: {{ palette.bg_surface | rofi }};
     fg: {{ palette.foreground | rofi }};
+    fg-dim: {{ palette.foreground_dim | rofi }};
     accent: {{ palette.accent | rofi }};
 
-    /* The Typography Injection */
+    /* Typography */
     font: "{{ hardware.font_family }} 13";
 
-    /* The Global Purge */
+    /* Reset */
     background-color: transparent;
     text-color: @fg;
     margin: 0;
@@ -23,54 +24,38 @@ configuration {
 }
 
 window {
-    /* The geometry: A strict 500px wide box, natively centered */
     width: 500px;
-    
-    /* 80% opacity pure black. Less dimming than the void, more glass-like */
-    background-color: {{ palette.bg_void | rofi }};
-    
-    /* A 1px steel gray border to physically separate it from the wallpaper */
+    background-color: @bg-void;
     border: 1px;
-    border-color: @fg;
-    
-    /* Internal spacing so the search bar doesn't scrape the glass */
+    border-color: {{ palette.bg_overlay | rofi }};
     padding: 30px;
 }
 
 mainbox {
-    /* Forces a 20-pixel gap between the search bar and the list */
     spacing: 20px;
 }
 
 inputbar {
-    background-color: @bg-solid;
+    background-color: @bg-surface;
     padding: 15px 20px;
-    /* Explicitly tells Rofi to only draw the text entry, ignoring the counter */
     children: [ entry ];
 }
 
 entry {
-    /* Uses the steel gray text color for the search query */
     text-color: @fg;
-    /* Optional: placeholder text if you want it */
     placeholder: "Search...";
-    placeholder-color: #555555;
+    placeholder-color: @fg-dim;
 }
 
 listview {
     spacing: 10px;
     scrollbar: false;
-    /* Locks the UI to exactly 8 visible apps at a time */
     lines: 8;
 }
 
 element {
-    /* Top/Bottom: 10px, Left/Right: 20px */
     padding: 10px 20px;
-    
-    /* Top: 0, Right: 0, Bottom: 0, Left: 2px */
     border: 0 0 0 2px;
-    /* Invisible placeholder border to prevent text jitter */
     border-color: transparent;
 }
 
@@ -82,15 +67,11 @@ element normal.normal, element alternate.normal {
 element selected.normal {
     background-color: transparent;
     text-color: @accent;
-    /* Ignites the white katana slice on the left edge */
     border-color: @accent;
 }
 
 element-text {
-    /* Forces the text to take the background and foreground color of the highlighted element */
     background-color: inherit;
     text-color: inherit;
-    
-    /* Perfectly centers the Iosevka font vertically within the padding */
     vertical-align: 0.5;
 }

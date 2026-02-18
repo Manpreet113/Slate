@@ -1,13 +1,19 @@
 [palette]
+mode = "matugen"
 bg_void = "#0b0c10"
 bg_void_transparent = "#0b0c1099"
+bg_surface = "#14161c"
+bg_overlay = "#1a1d26"
 foreground = "#aeb3c2"
-accent = "#ffffff"
+foreground_dim = "#555b6e"
+accent = "#5f87af"
+accent_bright = "#7aa2cf"
 
 [hardware]
 monitor_scale = 1.0
 root_uuid = "REPLACE_ME_RUN_SLATE_CHECK"
 font_family = "Iosevka Nerd Font"
+wallpaper = "~/Pictures/Wallpapers/slate-forest.png"
 
 # Waybar style template
 [[apps]]
@@ -184,12 +190,4 @@ name = "zprofile"
 enabled = true
 template_path = "zsh/.zprofile"
 config_path = "../.zprofile" # Relative to ~/.config/ -> ~/.zprofile
-reload_signal = { type = "none" }
-
-# Limine bootloader
-[[apps]]
-name = "limine"
-enabled = false
-template_path = "limine.conf"
-config_path = "../boot/limine/limine.conf"  # Requires sudo, manual install
 reload_signal = { type = "none" }

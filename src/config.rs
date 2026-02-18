@@ -9,10 +9,24 @@ pub struct SlateConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Palette {
-    pub bg_void: String,      // e.g., "#0b0c10"
-    pub bg_void_transparent: String, // e.g., "#0b0c1099"
-    pub foreground: String,   // e.g., "#aeb3c2"
-    pub accent: String,       // e.g., "#ffffff"
+    #[serde(default = "default_palette_mode")]
+    pub mode: String,                // "manual" or "matugen"
+    pub bg_void: String,             // Darkest background
+    pub bg_void_transparent: String, // Background with alpha
+    #[serde(default)]
+    pub bg_surface: String,          // Card/input surface
+    #[serde(default)]
+    pub bg_overlay: String,          // Overlay/hover layer
+    pub foreground: String,          // Primary text
+    #[serde(default)]
+    pub foreground_dim: String,      // Dimmed/inactive text
+    pub accent: String,              // Primary accent
+    #[serde(default)]
+    pub accent_bright: String,       // Bright accent (hover)
+}
+
+fn default_palette_mode() -> String {
+    "manual".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -21,6 +35,12 @@ pub struct Hardware {
     pub root_uuid: String,
     #[serde(default = "default_font")]
     pub font_family: String,
+    #[serde(default = "default_wallpaper")]
+    pub wallpaper: String,
+}
+
+fn default_wallpaper() -> String {
+    "~/Pictures/Wallpapers/slate-forest.png".to_string()
 }
 
 fn default_font() -> String {
