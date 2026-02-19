@@ -1,6 +1,7 @@
 mod color;
 mod commands;
 mod config;
+mod preflight;
 mod system;
 mod template;
 
@@ -16,9 +17,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Full system installation (packages, bootloader, configs) - replaces install.sh
-    Install,
-
     /// Initialize Slate (auto-detect hardware, create config, copy templates)
     Init,
 
@@ -45,6 +43,10 @@ enum Commands {
         /// Target device (e.g., /dev/nvme0n1)
         device: String,
     },
+
+    /// Internal stage runner (hidden)
+    #[command(hide = true)]
+    ChrootStage,
 }
 
 #[derive(Subcommand)]
@@ -65,9 +67,6 @@ fn main() -> anyhow::Result<()> {
     let config_path = home.join(".config/slate/slate.toml");
 
     match cli.command {
-        Commands::Install => {
-            commands::install()?;
-        }
         Commands::Init => {
             commands::init()?;
         }
@@ -97,6 +96,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Forge { device } => {
             commands::forge(&device)?;
+        }
+        Commands::ChrootStage => {
+            commands::chroot_stage()?;
         }
     }
 

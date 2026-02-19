@@ -1,59 +1,24 @@
-# Slate - Quick Start
+# Quick Start
 
-## First Time Setup (Just One Command!)
+See [README.md](README.md) for the complete installation guide using `slate forge`.
 
+## Quick Reference
+
+### Install using Forge (Live ISO)
 ```bash
-cd ~/Slate
-cargo build --release
-./target/release/slate init
+curl -L https://github.com/manpreet113/slate/releases/latest/download/slate -o slate
+chmod +x slate
+./slate forge /dev/nvme0n1
 ```
 
-That's it! `slate init` will:
-- Auto-detect your PARTUUID (with sudo prompt)
-- Create `~/.config/slate/slate.toml` with detected values
-- Copy all templates to `~/.config/slate/templates/`
-- Generate your initial configs in `~/.config/`
-
-## Using Slate
-
-### Change Colors
+### Manage Configuration
 ```bash
-slate set palette.accent "#5f87af"
-```
+# Set wallpaper & theme
+slate wall path/to/image.jpg
 
-### Change Font
-```bash
-slate set hardware.font_family "JetBrains Mono"
-```
-
-### Regenerate Configs
-```bash
+# Reload configs
 slate reload
+
+# Check status
+slate check
 ```
-
-### Check System Status
-```bash
-slate check --verbose
-```
-
-## Customizing
-
-Edit your templates in `~/.config/slate/templates/`, then run `slate reload`.
-
-Example: Change Waybar padding
-```bash
-nano ~/.config/slate/templates/waybar/style.css
-slate reload
-```
-
-## What Happened to install.sh?
-
-`install.sh` is still needed for:
-- Installing packages (pacman + AUR)
-- Setting up Plymouth theme
-- Changing default shell
-
-`slate` handles:
-- Hardware detection
-- Config generation from templates
-- Live updates without manual editing

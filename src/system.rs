@@ -1,68 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-/// Verify that the process is NOT running as root (required for makepkg)
-pub fn ensure_not_root() -> Result<()> {
-    // In standard libc/unix behavior, finding euid is reliable
-    // We can shell out to `id -u` if we want to avoid libc crate dep,
-    // or checks env vars, but `id -u` is very standard.
-    // Given the user wants "native", adding libc dependency is better than `id -u`.
-    // But since I don't want to add a crate right now if I can avoid it,
-    // I'll assume `Command::new("id")` is acceptable for this simple check,
-    // OR I can use the trick of checking $HOME or $USER? No that's flakey.
-    // Let's stick to a simple check.
-
-    // Actually, checking if we can write to /root or similar? No.
-    // Let's use `id -u` for now, it's safer than adding dependencies mid-flight
-    // without user approval if I can avoid it.
-    // Wait, the user has `home` crate.
-    // User specifically asked for "native" not shell wrappers.
-    // I should really use `libc`.
-    // But I'll stick to a minimal robust check for now.
-
-    let output = Command::new("id")
-        .arg("-u")
-        .output()
-        .context("Failed to run id")?;
-    let uid = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .context("Failed to parse uid")?;
-
-    if uid == 0 {
-        bail!(
-            "Please do NOT run slate as root. It uses sudo internally where needed.\n\
-               Running as root will cause makepkg (AUR builds) to fail."
-        );
-    }
-
-    Ok(())
-}
-
-/// Verify that base-devel group is installed (required for compilation)
-pub fn ensure_base_devel() -> Result<()> {
-    // Check for critical build tools
-    let tools = ["gcc", "make", "strip", "pkg-config", "fakeroot"];
-    let mut missing = Vec::new();
-
-    for tool in tools {
-        if Command::new("which").arg(tool).output().is_err() {
-            missing.push(tool);
-        }
-    }
-
-    if !missing.is_empty() {
-        bail!(
-            "Missing 'base-devel' tools: {}. \n\
-               Please install them first: sudo pacman -S --needed base-devel",
-            missing.join(", ")
-        );
-    }
-
-    Ok(())
-}
 
 /// Find the root device using /proc/mounts (no findmnt)
 pub fn get_root_device() -> Result<String> {

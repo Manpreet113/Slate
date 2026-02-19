@@ -3,6 +3,10 @@ use crate::config::SlateConfig;
 use std::collections::HashMap;
 use tera::{Context, Tera, Value};
 
+// Include generated templates
+include!(concat!(env!("OUT_DIR"), "/embedded_templates.rs"));
+pub const EMBEDDED_TEMPLATES: &[(&str, &str)] = TEMPLATES;
+
 pub struct TemplateEngine {
     tera: Tera,
 }

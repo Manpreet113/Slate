@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use std::env;
 use std::fs;
-use std::path::PathBuf;
 
 pub fn init() -> Result<()> {
     println!("[Slate] Initializing configuration...");
@@ -20,20 +18,11 @@ pub fn init() -> Result<()> {
     let uuid = detect_uuid()?;
     println!("    ✓ LUKS UUID: {}", uuid);
 
-    // 3. Copy example config from repo and update UUID
+    // 3. Write embedded example config and update UUID
     println!("  → Generating slate.toml...");
-    let repo_dir = env::current_dir()?.canonicalize()?;
-    let example_config_path = repo_dir.join("example.slate.toml");
+    // Embed example config at compile time
+    let example_content = include_str!("../../example.slate.toml");
 
-    if !example_config_path.exists() {
-        anyhow::bail!(
-            "example.slate.toml not found in {}. Run slate init from the Slate repository directory.",
-            repo_dir.display()
-        );
-    }
-
-    // Read example config and update UUID
-    let example_content = fs::read_to_string(&example_config_path)?;
     let updated_content = example_content.replace(
         "root_uuid = \"REPLACE_ME_RUN_SLATE_CHECK\"",
         &format!("root_uuid = \"{}\"", uuid),
@@ -42,19 +31,24 @@ pub fn init() -> Result<()> {
     fs::write(&config_path, updated_content)?;
     println!("    ✓ Saved to {}", config_path.display());
 
-    // 4. Copy templates from repo
-    println!("  → Copying templates...");
-    let repo_templates = repo_dir.join("templates");
+    // 4. Write embedded templates
+    println!("  → Deploying embedded templates...");
 
-    if !repo_templates.exists() {
-        anyhow::bail!(
-            "templates/ not found in {}. Run slate init from the Slate repository directory.",
-            repo_dir.display()
-        );
+    // Use the embedded templates exposed in template.rs
+    for (name, content) in crate::template::EMBEDDED_TEMPLATES {
+        let dest_path = templates_dir.join(name);
+
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&dest_path, content)?;
     }
 
-    copy_dir_recursive(&repo_templates, &templates_dir)?;
-    println!("    ✓ All templates copied (24 app configs)");
+    println!(
+        "    ✓ All templates deployed ({} files)",
+        crate::template::EMBEDDED_TEMPLATES.len()
+    );
 
     // 5. Run initial reload
     println!("\n[Slate] Running initial config generation...");
@@ -74,9 +68,15 @@ pub fn init() -> Result<()> {
 fn detect_uuid() -> Result<String> {
     use crate::system;
 
+    // Use get_root_device but handle Chroot environment?
+    // slate init is usually run by user on a live system.
+    // If running in chroot, get_root_device might return /dev/mapper/root correctly.
+
     let root_device = system::get_root_device().context("Failed to detect root device")?;
 
     if !root_device.starts_with("/dev/mapper/") && !root_device.starts_with("/dev/dm-") {
+        // Warning instead of bail?
+        // No, Slate is for LUKS setups.
         anyhow::bail!(
             "Slate requires LUKS encryption. Root device is {}, not a mapped device.",
             root_device
@@ -89,23 +89,4 @@ fn detect_uuid() -> Result<String> {
     let uuid = system::get_uuid(&physical_device).context("Failed to get LUKS UUID")?;
 
     Ok(uuid)
-}
-
-fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
-    fs::create_dir_all(dst)?;
-
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let dst_path = dst.join(&file_name);
-
-        if path.is_dir() {
-            copy_dir_recursive(&path, &dst_path)?;
-        } else {
-            fs::copy(&path, &dst_path)?;
-        }
-    }
-
-    Ok(())
 }
