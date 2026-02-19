@@ -34,18 +34,16 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Update slate.toml and trigger reload
-    Set {
-        key: String,
-        value: String,
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Wallpaper management
     Wall {
         #[command(subcommand)]
         action: WallAction,
+    },
+
+    /// Destructive system provisioning (THE FORGE)
+    Forge {
+        /// Target device (e.g., /dev/nvme0n1)
+        device: String,
     },
 }
 
@@ -85,18 +83,6 @@ fn main() -> anyhow::Result<()> {
             }
             commands::reload(&config_path, dry_run)?;
         }
-        Commands::Set {
-            key,
-            value,
-            dry_run,
-        } => {
-            if !config_path.exists() {
-                eprintln!("[Slate] Config not found!");
-                eprintln!("Run 'slate init' to set up Slate for the first time.");
-                std::process::exit(1);
-            }
-            commands::set(&config_path, &key, &value, dry_run)?;
-        }
         Commands::Wall { action } => {
             if !config_path.exists() {
                 eprintln!("[Slate] Config not found!");
@@ -108,6 +94,9 @@ fn main() -> anyhow::Result<()> {
                     commands::wall_set(&config_path, &path)?;
                 }
             }
+        }
+        Commands::Forge { device } => {
+            commands::forge(&device)?;
         }
     }
 
