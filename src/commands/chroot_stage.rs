@@ -97,10 +97,11 @@ fn configure_base(config: &InstallConfig) -> Result<()> {
 fn configure_user(config: &InstallConfig) -> Result<()> {
     println!("  > Configuring User & Auth...");
 
-    // Create user
+    // Create user with bash initially — zsh isn't installed yet.
+    // We'll switch to zsh after package provisioning.
     run_command(
         "useradd",
-        &["-m", "-G", "wheel", "-s", "/bin/zsh", &config.username],
+        &["-m", "-G", "wheel", "-s", "/bin/bash", &config.username],
     )?;
 
     // Set passwords
@@ -183,6 +184,9 @@ fn provision_packages(config: &InstallConfig) -> Result<()> {
 
     // Running as the new user since makepkg hates root
     run_command("su", &["-", &config.username, "-c", &ax_cmd])?;
+
+    // Now that zsh is installed, set it as the user's shell
+    run_command("chsh", &["-s", "/bin/zsh", &config.username])?;
 
     // Enable services
     run_command("systemctl", &["enable", "NetworkManager", "bluetooth"])?;
