@@ -23,7 +23,7 @@ pub fn chroot_stage() -> Result<()> {
     configure_user(&config)?;
 
     // 4. AX Provisioning
-    provision_packages()?;
+    provision_packages(&config)?;
 
     // 5. Bootloader & UKI
     configure_boot(&config)?;
@@ -128,7 +128,7 @@ fn configure_user(config: &InstallConfig) -> Result<()> {
     Ok(())
 }
 
-fn provision_packages() -> Result<()> {
+fn provision_packages(config: &InstallConfig) -> Result<()> {
     println!("  > Provisioning Packages via AX...");
 
     // Manifest (Hardcoded for now as per plan/task "read from manifest" -> but we don't have a manifest file yet)
@@ -179,11 +179,10 @@ fn provision_packages() -> Result<()> {
     // Just install: ax -S --noconfirm <pkgs>
     // Note: `ax` usage: `ax -S <pkg>`
 
-    let mut args = vec!["-S", "--noconfirm"];
-    args.extend(packages);
+    let ax_cmd = format!("ax -S --noconfirm {}", packages.join(" "));
 
-    // Running as root inside chroot
-    run_command("ax", &args)?;
+    // Running as the new user since makepkg hates root
+    run_command("su", &["-", &config.username, "-c", &ax_cmd])?;
 
     // Enable services
     run_command("systemctl", &["enable", "NetworkManager", "bluetooth"])?;
