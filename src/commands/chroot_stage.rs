@@ -136,9 +136,9 @@ fn provision_packages(config: &InstallConfig) -> Result<()> {
         "hyprland",
         "waybar",
         "rofi-wayland",
-        "kitty",
+        "ghostty",
         "mako",
-        "swww",
+        "hyprpaper",
         "grim",
         "slurp",
         "wl-clipboard",
@@ -305,14 +305,16 @@ fn run_user_init(config: &InstallConfig) -> Result<()> {
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     println!("    $ {} {}", cmd, args.join(" "));
-    let output = Command::new(cmd)
+    // Use spawn + wait (inherited stdio) so output streams live to the
+    // terminal instead of being silently buffered. This prevents the
+    // installer from appearing frozen during long operations like ax.
+    let status = Command::new(cmd)
         .args(args)
-        .output()
+        .status()
         .context(format!("Failed to run {}", cmd))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Command failed: {}\n{}", cmd, stderr);
+    if !status.success() {
+        bail!("Command failed: {}", cmd);
     }
     Ok(())
 }
