@@ -132,11 +132,6 @@ fn configure_user(config: &InstallConfig) -> Result<()> {
 fn provision_packages(config: &InstallConfig) -> Result<()> {
     println!("  > Provisioning Packages via AX...");
 
-    // Manifest (Hardcoded for now as per plan/task "read from manifest" -> but we don't have a manifest file yet)
-    // "The existing package list in install.rs is the right starting point — move it to a TOML manifest file"
-    // For this MVP, I'll put a list here.
-    // And use `ax` to install them.
-
     let packages = [
         "hyprland",
         "waybar",
@@ -166,7 +161,7 @@ fn provision_packages(config: &InstallConfig) -> Result<()> {
         "neofetch",
         "firefox",
         "thunar",
-        "visual-studio-code-bin", // AUR check?
+        "visual-studio-code-bin",
         "matugen-bin",
         "wlogout",
         "networkmanager",
@@ -176,16 +171,29 @@ fn provision_packages(config: &InstallConfig) -> Result<()> {
 
     println!("    Syncing and installing {} packages...", packages.len());
 
-    // We update first: ax -Syu ?
-    // Just install: ax -S --noconfirm <pkgs>
-    // Note: `ax` usage: `ax -S <pkg>`
+    // ax calls `sudo pacman` internally for official packages. There is no TTY
+    // in the chroot environment, so sudo cannot prompt for a password.
+    // Drop a temporary NOPASSWD rule for the duration of provisioning only;
+    // the permanent wheel rule (requires password) is already in /etc/sudoers.
+    let nopasswd_rule = format!("{} ALL=(ALL) NOPASSWD: ALL\n", config.username);
+    let nopasswd_path = "/etc/sudoers.d/99-slate-install";
+    fs::create_dir_all("/etc/sudoers.d")?;
+    fs::write(nopasswd_path, &nopasswd_rule)?;
+    // sudoers.d files must not be world-writable
+    run_command("chmod", &["0440", nopasswd_path])?;
 
     let ax_cmd = format!("ax -S --noconfirm {}", packages.join(" "));
 
-    // Running as the new user since makepkg hates root
-    run_command("su", &["-", &config.username, "-c", &ax_cmd])?;
+    // Run as the new user — makepkg refuses to run as root
+    let result = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
 
-    // Now that zsh is installed, set it as the user's shell
+    // Always remove the temporary rule, even if ax failed
+    let _ = fs::remove_file(nopasswd_path);
+
+    // Propagate any ax error after the cleanup
+    result?;
+
+    // Now that zsh is installed, set it as the user's login shell
     run_command("chsh", &["-s", "/bin/zsh", &config.username])?;
 
     // Enable services
