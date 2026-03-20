@@ -209,9 +209,9 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     }
 
     // AUR Packages via Ax
-    println!("  > Installing AUR Packages (tuigreet, vscode) via Ax...");
+    println!("  > Installing VS Code (AUR) via Ax...");
     let _ = Command::new("sudo")
-        .args(["-u", &config.username, "ax", "-S", "tuigreet", "visual-studio-code-bin", "--noconfirm"])
+        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "--noconfirm"])
         .status();
 
     Ok(())
