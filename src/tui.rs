@@ -1,4 +1,4 @@
-use crate::system::BlockDevice;
+use crate::system::{self, BlockDevice};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -64,60 +64,91 @@ pub struct App {
     pub state: AppState,
     pub devices: Vec<BlockDevice>,
     pub selected_disk: Option<usize>,
-    pub disk_list_state: ListState,
+    pub list_state: ListState,
     pub user_info: UserInfo,
-    pub input: String,
+    pub input: String, // search query for lists, or direct input for fields
+    pub keymaps: Vec<String>,
+    pub timezones: Vec<String>,
+    pub filtered_items: Vec<String>,
     pub logs: Vec<String>,
     pub progress: u16,
     pub rx: Option<Receiver<InstallMsg>>,
 }
 
 impl App {
-    pub fn new(devices: Vec<BlockDevice>) -> Self {
-        let mut disk_list_state = ListState::default();
+    pub fn new(devices: Vec<BlockDevice>, keymaps: Vec<String>, timezones: Vec<String>) -> Self {
+        let mut list_state = ListState::default();
         if !devices.is_empty() {
-            disk_list_state.select(Some(0));
+            list_state.select(Some(0));
         }
 
         Self {
             state: AppState::Welcome,
             devices,
             selected_disk: None,
-            disk_list_state,
+            list_state,
             user_info: UserInfo::default(),
             input: String::new(),
+            keymaps,
+            timezones,
+            filtered_items: Vec::new(),
             logs: vec!["[System] App Initialized".to_string()],
             progress: 0,
             rx: None,
         }
     }
 
-    pub fn next_disk(&mut self) {
-        let i = match self.disk_list_state.selected() {
-            Some(i) => {
-                if i >= self.devices.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
+    pub fn update_filter(&mut self) {
+        let query = self.input.to_lowercase();
+        let source = match self.state {
+            AppState::UserSetupKeymap => &self.keymaps,
+            AppState::UserSetupTimezone => &self.timezones,
+            _ => return,
         };
-        self.disk_list_state.select(Some(i));
+
+        self.filtered_items = source
+            .iter()
+            .filter(|item| item.to_lowercase().contains(&query))
+            .cloned()
+            .collect();
+        
+        if self.filtered_items.is_empty() {
+            self.list_state.select(None);
+        } else {
+            self.list_state.select(Some(0));
+        }
     }
 
-    pub fn previous_disk(&mut self) {
-        let i = match self.disk_list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.devices.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+    pub fn next_item(&mut self) {
+        let len = match self.state {
+            AppState::SelectingDisk => self.devices.len(),
+            AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
+            _ => 0,
+        };
+
+        if len == 0 { return; }
+
+        let i = match self.list_state.selected() {
+            Some(i) => if i >= len - 1 { 0 } else { i + 1 },
             None => 0,
         };
-        self.disk_list_state.select(Some(i));
+        self.list_state.select(Some(i));
+    }
+
+    pub fn previous_item(&mut self) {
+        let len = match self.state {
+            AppState::SelectingDisk => self.devices.len(),
+            AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
+            _ => 0,
+        };
+
+        if len == 0 { return; }
+
+        let i = match self.list_state.selected() {
+            Some(i) => if i == 0 { len - 1 } else { i - 1 },
+            None => 0,
+        };
+        self.list_state.select(Some(i));
     }
 }
 
@@ -125,13 +156,16 @@ pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
 where
     F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
 {
+    let keymaps = system::list_keymaps().unwrap_or_else(|_| vec!["us".to_string()]);
+    let timezones = system::list_timezones().unwrap_or_else(|_| vec!["UTC".to_string()]);
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(devices);
+    let mut app = App::new(devices, keymaps, timezones);
     let (tx, rx) = mpsc::channel();
     app.rx = Some(rx);
 
@@ -178,50 +212,57 @@ where
                     AppState::Welcome => {
                         if key.code == KeyCode::Enter {
                             app.state = AppState::UserSetupKeymap;
-                            app.input = app.user_info.keymap.clone();
+                            app.input = String::new();
+                            app.update_filter();
                         } else if key.code == KeyCode::Char('q') {
                             return Ok(());
                         }
                     }
                     AppState::UserSetupKeymap => match key.code {
                         KeyCode::Enter => {
-                            if !app.input.is_empty() {
-                                app.user_info.keymap = app.input.drain(..).collect();
-                                // Apply to live session
-                                let _ = std::process::Command::new("loadkeys").arg(&app.user_info.keymap).status();
-                            } else {
-                                app.input.clear();
+                            if let Some(i) = app.list_state.selected() {
+                                if let Some(selection) = app.filtered_items.get(i) {
+                                    app.user_info.keymap = selection.clone();
+                                    let _ = std::process::Command::new("loadkeys").arg(&app.user_info.keymap).status();
+                                    app.state = AppState::SelectingDisk;
+                                    app.list_state.select(Some(0));
+                                }
                             }
-                            app.state = AppState::SelectingDisk;
                         }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Down => app.next_item(),
+                        KeyCode::Up => app.previous_item(),
+                        KeyCode::Char(c) => { app.input.push(c); app.update_filter(); }
+                        KeyCode::Backspace => { app.input.pop(); app.update_filter(); }
                         KeyCode::Esc => app.state = AppState::Welcome,
                         _ => {}
                     },
                     AppState::SelectingDisk => match key.code {
-                        KeyCode::Down => app.next_disk(),
-                        KeyCode::Up => app.previous_disk(),
+                        KeyCode::Down => app.next_item(),
+                        KeyCode::Up => app.previous_item(),
                         KeyCode::Enter => {
-                            if let Some(i) = app.disk_list_state.selected() {
+                            if let Some(i) = app.list_state.selected() {
                                 app.selected_disk = Some(i);
                                 app.state = AppState::UserSetupTimezone;
-                                app.input = app.user_info.timezone.clone();
+                                app.input = String::new();
+                                app.update_filter();
                             }
                         }
                         _ => {}
                     },
                     AppState::UserSetupTimezone => match key.code {
                         KeyCode::Enter => {
-                            if !app.input.is_empty() {
-                                app.user_info.timezone = app.input.drain(..).collect();
-                            } else {
-                                app.input.clear();
+                            if let Some(i) = app.list_state.selected() {
+                                if let Some(selection) = app.filtered_items.get(i) {
+                                    app.user_info.timezone = selection.clone();
+                                    app.state = AppState::UserSetupHostname;
+                                    app.input = String::new();
+                                }
                             }
-                            app.state = AppState::UserSetupHostname;
                         }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Down => app.next_item(),
+                        KeyCode::Up => app.previous_item(),
+                        KeyCode::Char(c) => { app.input.push(c); app.update_filter(); }
+                        KeyCode::Backspace => { app.input.pop(); app.update_filter(); }
                         KeyCode::Esc => app.state = AppState::SelectingDisk,
                         _ => {}
                     },
@@ -316,12 +357,24 @@ fn ui(f: &mut Frame, app: &mut App) {
         AppState::SelectingDisk => {
             let items: Vec<ListItem> = app.devices.iter().map(|d| ListItem::new(format!("{} | {} | {}", d.path, d.size, d.model))).collect();
             let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Select Disk")).highlight_symbol(">> ");
-            f.render_stateful_widget(list, chunks[1], &mut app.disk_list_state);
+            f.render_stateful_widget(list, chunks[1], &mut app.list_state);
         }
-        AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
+        AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
+            let prompt = if app.state == AppState::UserSetupKeymap { "Search Keymap:" } else { "Search Timezone:" };
+            let sub_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
+            
+            let search_p = Paragraph::new(app.input.clone()).block(Block::default().borders(Borders::ALL).title(prompt));
+            f.render_widget(search_p, sub_chunks[0]);
+            
+            let items: Vec<ListItem> = app.filtered_items.iter().map(|i| ListItem::new(i.as_str())).collect();
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("Results (Up/Down to scroll)"))
+                .highlight_symbol(">> ")
+                .highlight_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+            f.render_stateful_widget(list, sub_chunks[1], &mut app.list_state);
+        }
+        AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
             let prompt = match app.state {
-                AppState::UserSetupKeymap => "Keyboard Layout (e.g. us, de):",
-                AppState::UserSetupTimezone => "Timezone (e.g. UTC, Europe/London):",
                 AppState::UserSetupHostname => "Hostname:",
                 AppState::UserSetupUsername => "Username:",
                 AppState::UserSetupPassword => "Password:",
@@ -371,6 +424,6 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    let help = Paragraph::new("Enter: Select/Continue | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
+    let help = Paragraph::new("Arrows: Scroll | Type: Search | Enter: Select | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[2]);
 }

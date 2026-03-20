@@ -21,8 +21,6 @@ pub fn get_root_device() -> Result<String> {
     bail!("Could not identify root filesystem in /proc/mounts")
 }
 
-
-
 /// Extract filesystem/LUKS UUID by scanning /dev/disk/by-uuid/
 pub fn get_uuid(device_path: &str) -> Result<String> {
     let uuid_dir = Path::new("/dev/disk/by-uuid");
@@ -75,19 +73,15 @@ pub fn list_block_devices() -> Result<Vec<BlockDevice>> {
 
         // Skip partitions (e.g. sda1, nvme0n1p1) and loop devices
         if name.starts_with("loop") || name.contains('p') || (name.starts_with("sd") && name.len() > 3) {
-            // This is a bit naive but works for common naming schemes.
-            // A better way is checking /sys/class/block/NAME/partition file existence.
             continue;
         }
 
         let device_path = block_dir.join(&name);
-        
-        // Ensure it's not a partition
         if device_path.join("partition").exists() {
             continue;
         }
 
-        // Get size (in 512-byte blocks)
+        // Get size
         let size_str = fs::read_to_string(device_path.join("size")).unwrap_or_default();
         let size_bytes = size_str.trim().parse::<u64>().unwrap_or(0) * 512;
         let size_gb = size_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
@@ -106,4 +100,70 @@ pub fn list_block_devices() -> Result<Vec<BlockDevice>> {
     }
 
     Ok(devices)
+}
+
+/// List all available keymaps in /usr/share/kbd/keymaps/
+pub fn list_keymaps() -> Result<Vec<String>> {
+    let mut keymaps = Vec::new();
+    let base_path = Path::new("/usr/share/kbd/keymaps");
+    if !base_path.exists() {
+        return Ok(vec!["us".to_string()]); // Fallback
+    }
+
+    fn collect_maps(dir: &Path, keymaps: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                collect_maps(&path, keymaps)?;
+            } else if let Some(name) = path.file_name() {
+                let s = name.to_string_lossy();
+                if s.ends_with(".map.gz") || s.ends_with(".map") {
+                    let map_name = s.trim_end_matches(".map.gz").trim_end_matches(".map");
+                    keymaps.push(map_name.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    collect_maps(base_path, &mut keymaps)?;
+    keymaps.sort();
+    keymaps.dedup();
+    Ok(keymaps)
+}
+
+/// List all available timezones in /usr/share/zoneinfo/
+pub fn list_timezones() -> Result<Vec<String>> {
+    let mut zones = Vec::new();
+    let base_path = Path::new("/usr/share/zoneinfo");
+    if !base_path.exists() {
+        return Ok(vec!["UTC".to_string()]); // Fallback
+    }
+
+    fn collect_zones(dir: &Path, base: &Path, zones: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+            // Skip non-timezone files/folders
+            if name.starts_with('.') || name == "posix" || name == "right" || name == "Etc" || name.ends_with(".tab") {
+                continue;
+            }
+
+            if path.is_dir() {
+                let _ = collect_zones(&path, base, zones);
+            } else {
+                if let Ok(relative) = path.strip_prefix(base) {
+                    zones.push(relative.to_string_lossy().to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let _ = collect_zones(base_path, base_path, &mut zones);
+    zones.sort();
+    Ok(zones)
 }
