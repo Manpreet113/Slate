@@ -7,7 +7,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::{CrosstermBackend, Backend},
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge, Wrap},
     Frame, Terminal,
     prelude::Stylize,
@@ -17,11 +17,25 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     pub hostname: String,
     pub username: String,
     pub password: String,
+    pub keymap: String,
+    pub timezone: String,
+}
+
+impl Default for UserInfo {
+    fn default() -> Self {
+        Self {
+            hostname: String::new(),
+            username: String::new(),
+            password: String::new(),
+            keymap: "us".to_string(),
+            timezone: "UTC".to_string(),
+        }
+    }
 }
 
 pub enum InstallMsg {
@@ -34,7 +48,9 @@ pub enum InstallMsg {
 #[derive(PartialEq)]
 pub enum AppState {
     Welcome,
+    UserSetupKeymap,
     SelectingDisk,
+    UserSetupTimezone,
     UserSetupHostname,
     UserSetupUsername,
     UserSetupPassword,
@@ -109,7 +125,6 @@ pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
 where
     F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
 {
-    // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -122,7 +137,6 @@ where
 
     let res = run_loop(&mut terminal, app, tx, Some(forge_fn));
 
-    // restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -147,7 +161,6 @@ where
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        // Check for updates from installer thread
         if let Some(ref rx) = app.rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -164,20 +177,52 @@ where
                 match app.state {
                     AppState::Welcome => {
                         if key.code == KeyCode::Enter {
-                            app.state = AppState::SelectingDisk;
+                            app.state = AppState::UserSetupKeymap;
+                            app.input = app.user_info.keymap.clone();
                         } else if key.code == KeyCode::Char('q') {
                             return Ok(());
                         }
                     }
+                    AppState::UserSetupKeymap => match key.code {
+                        KeyCode::Enter => {
+                            if !app.input.is_empty() {
+                                app.user_info.keymap = app.input.drain(..).collect();
+                                // Apply to live session
+                                let _ = std::process::Command::new("loadkeys").arg(&app.user_info.keymap).status();
+                            } else {
+                                app.input.clear();
+                            }
+                            app.state = AppState::SelectingDisk;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::Welcome,
+                        _ => {}
+                    },
                     AppState::SelectingDisk => match key.code {
                         KeyCode::Down => app.next_disk(),
                         KeyCode::Up => app.previous_disk(),
                         KeyCode::Enter => {
                             if let Some(i) = app.disk_list_state.selected() {
                                 app.selected_disk = Some(i);
-                                app.state = AppState::UserSetupHostname;
+                                app.state = AppState::UserSetupTimezone;
+                                app.input = app.user_info.timezone.clone();
                             }
                         }
+                        _ => {}
+                    },
+                    AppState::UserSetupTimezone => match key.code {
+                        KeyCode::Enter => {
+                            if !app.input.is_empty() {
+                                app.user_info.timezone = app.input.drain(..).collect();
+                            } else {
+                                app.input.clear();
+                            }
+                            app.state = AppState::UserSetupHostname;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::SelectingDisk,
                         _ => {}
                     },
                     AppState::UserSetupHostname => match key.code {
@@ -187,7 +232,7 @@ where
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
-                        KeyCode::Esc => app.state = AppState::SelectingDisk,
+                        KeyCode::Esc => app.state = AppState::UserSetupTimezone,
                         _ => {}
                     },
                     AppState::UserSetupUsername => match key.code {
@@ -225,12 +270,7 @@ where
                         KeyCode::Char('n') | KeyCode::Esc => app.state = AppState::SelectingDisk,
                         _ => {}
                     },
-                    AppState::Finished => {
-                        if key.code == KeyCode::Enter || key.code == KeyCode::Char('q') {
-                            return Ok(());
-                        }
-                    }
-                    AppState::Error(_) => {
+                    AppState::Finished | AppState::Error(_) => {
                         if key.code == KeyCode::Enter || key.code == KeyCode::Char('q') {
                             return Ok(());
                         }
@@ -238,13 +278,16 @@ where
                     AppState::Installing => {}
                 }
                 
-                // Allow exit via Q in any state (except inputting)
-                if key.code == KeyCode::Char('q') && app.state != AppState::UserSetupHostname && app.state != AppState::UserSetupUsername && app.state != AppState::UserSetupPassword {
+                if key.code == KeyCode::Char('q') && !is_input_state(&app.state) {
                      return Ok(());
                 }
             }
         }
     }
+}
+
+fn is_input_state(state: &AppState) -> bool {
+    matches!(state, AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword)
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -275,8 +318,10 @@ fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Select Disk")).highlight_symbol(">> ");
             f.render_stateful_widget(list, chunks[1], &mut app.disk_list_state);
         }
-        AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
+        AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
             let prompt = match app.state {
+                AppState::UserSetupKeymap => "Keyboard Layout (e.g. us, de):",
+                AppState::UserSetupTimezone => "Timezone (e.g. UTC, Europe/London):",
                 AppState::UserSetupHostname => "Hostname:",
                 AppState::UserSetupUsername => "Username:",
                 AppState::UserSetupPassword => "Password:",
@@ -287,7 +332,15 @@ fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(p, chunks[1]);
         }
         AppState::Confirmation => {
-             let p = Paragraph::new("Ready to install. This will wipe the selected disk.\n\nPress Enter to CONFIRM.").block(Block::default().borders(Borders::ALL));
+             let text = format!(
+                 "Configuration Summary:\n\nDisk: {}\nKeymap: {}\nTimezone: {}\nHostname: {}\nUser: {}\n\nPress Enter to CONFIRM and WIPE DISK.",
+                 app.devices[app.selected_disk.unwrap()].path,
+                 app.user_info.keymap,
+                 app.user_info.timezone,
+                 app.user_info.hostname,
+                 app.user_info.username
+             );
+             let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Confirmation"));
              f.render_widget(p, chunks[1]);
         }
         AppState::Installing | AppState::Finished => {
@@ -321,5 +374,3 @@ fn ui(f: &mut Frame, app: &mut App) {
     let help = Paragraph::new("Enter: Select/Continue | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[2]);
 }
-
-use ratatui::layout::Rect;

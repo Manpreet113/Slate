@@ -36,11 +36,16 @@ fn configure_base(config: &UserInfo) -> Result<()> {
     println!("  > Configuring Base System...");
 
     // Hostname
-    fs::write("/etc/hostname", &config.hostname)?;
+    fs::write("/etc/hostname", format!("{}\n", config.hostname))?;
 
-    // Timezone (Default to UTC)
+    // Timezone
     let _ = fs::remove_file("/etc/localtime");
-    std::os::unix::fs::symlink("/usr/share/zoneinfo/UTC", "/etc/localtime")?;
+    let zone_path = format!("/usr/share/zoneinfo/{}", config.timezone);
+    if Path::new(&zone_path).exists() {
+        std::os::unix::fs::symlink(&zone_path, "/etc/localtime")?;
+    } else {
+        std::os::unix::fs::symlink("/usr/share/zoneinfo/UTC", "/etc/localtime")?;
+    }
 
     // Locale
     let locale_gen = "/etc/locale.gen";
@@ -51,6 +56,9 @@ fn configure_base(config: &UserInfo) -> Result<()> {
         run_command("locale-gen", &[])?;
     }
     fs::write("/etc/locale.conf", "LANG=en_US.UTF-8\n")?;
+
+    // Keymap
+    fs::write("/etc/vconsole.conf", format!("KEYMAP={}\n", config.keymap))?;
 
     Ok(())
 }
