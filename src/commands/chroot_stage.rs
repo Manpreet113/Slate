@@ -7,10 +7,6 @@ use std::process::Command;
 use crate::tui::UserInfo;
 
 pub fn chroot_stage() -> Result<()> {
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  ARCH LINUX: CHROOT STAGE");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
     // 1. Load User Info
     let user_info_path = Path::new("/root/user_info.json");
     let user_info_content = fs::read_to_string(user_info_path)
@@ -20,15 +16,18 @@ pub fn chroot_stage() -> Result<()> {
     // 2. Base System Config
     configure_base(&user_info)?;
 
-    // 3. User & Auth
+    // 3. User & Auth & Shell
     configure_user(&user_info)?;
 
-    // 4. Bootloader
+    // 4. Desktop Environment (Hyprland & Greetd)
+    configure_desktop(&user_info)?;
+
+    // 5. Tooling (Ax, VSCode, Git)
+    configure_tools(&user_info)?;
+
+    // 6. Bootloader
     configure_boot()?;
 
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  CHROOT STAGE COMPLETE");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     Ok(())
 }
 
@@ -42,9 +41,9 @@ fn configure_base(config: &UserInfo) -> Result<()> {
     let _ = fs::remove_file("/etc/localtime");
     let zone_path = format!("/usr/share/zoneinfo/{}", config.timezone);
     if Path::new(&zone_path).exists() {
-        std::os::unix::fs::symlink(&zone_path, "/etc/localtime")?;
+        let _ = std::os::unix::fs::symlink(&zone_path, "/etc/localtime");
     } else {
-        std::os::unix::fs::symlink("/usr/share/zoneinfo/UTC", "/etc/localtime")?;
+        let _ = std::os::unix::fs::symlink("/usr/share/zoneinfo/UTC", "/etc/localtime");
     }
 
     // Locale
@@ -63,15 +62,17 @@ fn configure_base(config: &UserInfo) -> Result<()> {
     // Time & NTP
     run_command("hwclock", &["--systohc"])?;
     run_command("systemctl", &["enable", "systemd-timesyncd"])?;
+    run_command("systemctl", &["enable", "NetworkManager"])?;
+    run_command("systemctl", &["enable", "bluetooth"])?;
 
     Ok(())
 }
 
 fn configure_user(config: &UserInfo) -> Result<()> {
-    println!("  > Configuring User & Auth...");
+    println!("  > Configuring User & Zsh...");
 
-    // Create user
-    run_command("useradd", &["-m", "-G", "wheel", "-s", "/bin/bash", &config.username])?;
+    // Create user with Zsh
+    run_command("useradd", &["-m", "-G", "wheel", "-s", "/usr/bin/zsh", &config.username])?;
 
     // Set passwords
     let root_auth = format!("root:{}", config.password);
@@ -86,29 +87,154 @@ fn configure_user(config: &UserInfo) -> Result<()> {
         fs::write(sudoers_file, new_sudoers)?;
     }
 
+    // Modern Zshrc
+    let zshrc = r#"
+# slate-desktop: modern zshrc
+alias ls='eza --icons'
+alias l='eza -lh --icons'
+alias ll='eza -lha --icons'
+alias cat='bat'
+alias grep='rg'
+alias cd='zoxide'
+
+# Starship Prompt
+eval "$(starship init zsh)"
+eval "$(zoxide init zsh)"
+
+# Path
+export PATH=$PATH:$HOME/.local/bin
+"#;
+    let user_home = format!("/home/{}", config.username);
+    fs::write(format!("{}/.zshrc", user_home), zshrc)?;
+    
+    // Starship config (minimal)
+    fs::create_dir_all(format!("{}/.config", user_home))?;
+    fs::write(format!("{}/.config/starship.toml", user_home), "[add_newline]\ninsert_newline = false\n")?;
+
+    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
+
+    Ok(())
+}
+
+fn configure_desktop(config: &UserInfo) -> Result<()> {
+    println!("  > Configuring Hyprland & Greetd...");
+
+    let user_home = format!("/home/{}", config.username);
+    let hypr_dir = format!("{}/.config/hypr", user_home);
+    fs::create_dir_all(&hypr_dir)?;
+
+    let hypr_conf = format!(r#"
+# slate-desktop: minimal hyprland config
+monitor=,preferred,auto,auto
+
+exec-once = waybar & dunst
+$terminal = ghostty
+$browser = firefox
+
+input {{
+    kb_layout = {}
+    follow_mouse = 1
+}}
+
+general {{
+    gaps_in = 5
+    gaps_out = 10
+    border_size = 2
+    col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
+    col.inactive_border = rgba(595959aa)
+    layout = dwindle
+}}
+
+decoration {{
+    rounding = 10
+    blur {{
+        enabled = true
+        size = 3
+        passes = 1
+    }}
+}}
+
+animations {{
+    enabled = true
+    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
+    animation = windows, 1, 7, myBezier
+    animation = windowsOut, 1, 7, default, popin 80%
+    animation = border, 1, 10, default
+    animation = fade, 1, 7, default
+    animation = workspaces, 1, 6, default
+}}
+
+bind = SUPER, Enter, exec, $terminal
+bind = SUPER, B, exec, $browser
+bind = SUPER, Q, killactive,
+bind = SUPER, M, exit,
+bind = SUPER, V, togglefloating,
+bind = SUPER, Space, exec, wofi --show drun
+
+# Mouse bindings
+bindm = SUPER, mouse:272, movewindow
+bindm = SUPER, mouse:273, resizewindow
+"#, config.keymap);
+
+    fs::write(format!("{}/hyprland.conf", hypr_dir), hypr_conf)?;
+    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
+
+    // Greetd / Tuigreet
+    fs::create_dir_all("/etc/greetd")?;
+    let greetd_conf = format!(r#"[terminal]
+vt = 1
+
+[default_session]
+command = "tuigreet --time --cmd hyprland"
+user = "{}"
+"#, config.username);
+    fs::write("/etc/greetd/config.toml", greetd_conf)?;
+    run_command("systemctl", &["enable", "greetd"])?;
+
+    Ok(())
+}
+
+fn configure_tools(config: &UserInfo) -> Result<()> {
+    println!("  > Finalizing Tools (Ax & Git)...");
+
+    // Git Config
+    if !config.git_name.is_empty() {
+        let user_home = format!("/home/{}", config.username);
+        let gitconfig = format!(r#"[user]
+	name = {}
+	email = {}
+"#, config.git_name, config.git_email);
+        fs::write(format!("{}/.gitconfig", user_home), gitconfig)?;
+        run_command("chown", &[&format!("{}:{}", config.username, config.username), &format!("{}/.gitconfig", user_home)])?;
+    }
+
+    // AUR Packages via Ax
+    println!("  > Installing VS Code via Ax (AUR)...");
+    // We need to run ax as the user, not root, for AUR stuff usually, 
+    // but since we're in chroot and ax is at /usr/local/bin/ax, let's try direct.
+    // If ax requires a non-root user, we'd use 'sudo -u username ax ...'
+    let _ = Command::new("sudo")
+        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "--noconfirm"])
+        .status();
+
     Ok(())
 }
 
 fn configure_boot() -> Result<()> {
     println!("  > Configuring Bootloader...");
 
-    // 1. Detect UUID of root partition (the Btrfs partition)
     let root_dev = system::get_root_device()?;
     let root_uuid = system::get_uuid(&root_dev)?;
-    println!("    Root UUID: {}", root_uuid);
 
-    // 2. Install systemd-boot
     run_command("bootctl", &["install"])?;
 
-    // 3. Create loader entry
     let entry_content = format!(
-        "title   Arch Linux\nlinux   /vmlinuz-linux\ninitrd  /intel-ucode.img\ninitrd  /amd-ucode.img\ninitrd  /initramfs-linux.img\noptions root=UUID={} rw rootflags=subvol=@\n",
+        "title   Slate OS (Arch)\nlinux   /vmlinuz-linux\ninitrd  /intel-ucode.img\ninitrd  /amd-ucode.img\ninitrd  /initramfs-linux.img\noptions root=UUID={} rw rootflags=subvol=@\n",
         root_uuid
     );
     fs::create_dir_all("/boot/loader/entries")?;
     fs::write("/boot/loader/entries/arch.conf", entry_content)?;
 
-    // 4. Update loader.conf
     let loader_conf = "default arch.conf\ntimeout 3\nconsole-mode max\n";
     fs::write("/boot/loader/loader.conf", loader_conf)?;
 

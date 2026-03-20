@@ -40,16 +40,16 @@ fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Se
         // 2. Partitioning
         tx.send(InstallMsg::Log("Partitioning disk...".to_string()))?;
         cleansing(dev_path, &tx)?;
-        tx.send(InstallMsg::Progress(25))?;
+        tx.send(InstallMsg::Progress(20))?;
 
         // 3. Btrfs Setup
         let mut guard = MountGuard::new(&tx);
         subvolume_dance(dev_path, &mut guard, &tx)?;
-        tx.send(InstallMsg::Progress(40))?;
+        tx.send(InstallMsg::Progress(30))?;
 
         // 4. Injection (Pacstrap)
         injection(&tx)?;
-        tx.send(InstallMsg::Progress(70))?;
+        tx.send(InstallMsg::Progress(65))?;
 
         // 5. Save User Info
         tx.send(InstallMsg::Log("Saving user configuration...".to_string()))?;
@@ -93,7 +93,9 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
 
     run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@"], tx)?;
     run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@home"], tx)?;
+    run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@log"], tx)?;
     run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@pkg"], tx)?;
+    run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@snapshots"], tx)?;
 
     guard.unmount("/mnt")?;
 
@@ -101,11 +103,15 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
     guard.mount(&root_part, "/mnt", &["-o", &format!("subvol=@,{}", mount_opts)])?;
     
     fs::create_dir_all("/mnt/home")?;
+    fs::create_dir_all("/mnt/var/log")?;
     fs::create_dir_all("/mnt/var/cache/pacman/pkg")?;
+    fs::create_dir_all("/mnt/.snapshots")?;
     fs::create_dir_all("/mnt/boot")?;
 
     guard.mount(&root_part, "/mnt/home", &["-o", &format!("subvol=@home,{}", mount_opts)])?;
+    guard.mount(&root_part, "/mnt/var/log", &["-o", &format!("subvol=@log,{}", mount_opts)])?;
     guard.mount(&root_part, "/mnt/var/cache/pacman/pkg", &["-o", &format!("subvol=@pkg,{}", mount_opts)])?;
+    guard.mount(&root_part, "/mnt/.snapshots", &["-o", &format!("subvol=@snapshots,{}", mount_opts)])?;
 
     let efi_part = resolve_partition(device, 1);
     guard.mount(&efi_part, "/mnt/boot", &[])?;
@@ -114,13 +120,25 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
 }
 
 fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
-    run_cmd_captured("pacstrap", &["-K", "/mnt", "base", "base-devel", "linux", "linux-firmware", "intel-ucode", "amd-ucode", "btrfs-progs", "networkmanager"], tx)?;
+    let packages = [
+        "base", "base-devel", "linux", "linux-firmware", "intel-ucode", "amd-ucode", "btrfs-progs",
+        "sudo", "networkmanager", "bluez", "bluez-utils", "git", "zsh", "starship",
+        "hyprland", "hyprlock", "hypridle", "xdg-desktop-portal-hyprland", "qt6-wayland",
+        "pipewire", "wireplumber", "pipewire-pulse", "pipewire-alsa",
+        "greetd", "tuigreet", "firefox", "ghostty",
+        "eza", "bat", "zoxide", "fzf", "ripgrep", "curl"
+    ];
+
+    tx.send(InstallMsg::Log("Starting Pacstrap (Desktop Experience)...".to_string()))?;
+    let mut args = vec!["-K", "/mnt"];
+    args.extend(packages.iter());
+    run_cmd_captured("pacstrap", &args, tx)?;
 
     tx.send(InstallMsg::Log("Generating fstab...".to_string()))?;
     let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
     fs::write("/mnt/etc/fstab", output.stdout)?;
 
-    tx.send(InstallMsg::Log("Injecting binaries...".to_string()))?;
+    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax)...".to_string()))?;
     let current_exe = std::env::current_exe()?;
     fs::copy(&current_exe, "/mnt/usr/local/bin/slate")?;
     

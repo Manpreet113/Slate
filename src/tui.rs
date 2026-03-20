@@ -24,6 +24,8 @@ pub struct UserInfo {
     pub password: String,
     pub keymap: String,
     pub timezone: String,
+    pub git_name: String,
+    pub git_email: String,
 }
 
 impl Default for UserInfo {
@@ -34,6 +36,8 @@ impl Default for UserInfo {
             password: String::new(),
             keymap: "us".to_string(),
             timezone: "UTC".to_string(),
+            git_name: String::new(),
+            git_email: String::new(),
         }
     }
 }
@@ -54,6 +58,8 @@ pub enum AppState {
     UserSetupHostname,
     UserSetupUsername,
     UserSetupPassword,
+    UserSetupGitName,
+    UserSetupGitEmail,
     Confirmation,
     Installing,
     Finished,
@@ -66,7 +72,7 @@ pub struct App {
     pub selected_disk: Option<usize>,
     pub list_state: ListState,
     pub user_info: UserInfo,
-    pub input: String, // search query for lists, or direct input for fields
+    pub input: String,
     pub keymaps: Vec<String>,
     pub timezones: Vec<String>,
     pub filtered_items: Vec<String>,
@@ -289,11 +295,31 @@ where
                     AppState::UserSetupPassword => match key.code {
                         KeyCode::Enter => {
                             app.user_info.password = app.input.drain(..).collect();
-                            app.state = AppState::Confirmation;
+                            app.state = AppState::UserSetupGitName;
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
                         KeyCode::Esc => app.state = AppState::UserSetupUsername,
+                        _ => {}
+                    },
+                    AppState::UserSetupGitName => match key.code {
+                        KeyCode::Enter => {
+                            app.user_info.git_name = app.input.drain(..).collect();
+                            app.state = AppState::UserSetupGitEmail;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::UserSetupPassword,
+                        _ => {}
+                    },
+                    AppState::UserSetupGitEmail => match key.code {
+                        KeyCode::Enter => {
+                            app.user_info.git_email = app.input.drain(..).collect();
+                            app.state = AppState::Confirmation;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::UserSetupGitName,
                         _ => {}
                     },
                     AppState::Confirmation => match key.code {
@@ -328,7 +354,7 @@ where
 }
 
 fn is_input_state(state: &AppState) -> bool {
-    matches!(state, AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword)
+    matches!(state, AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail)
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -350,7 +376,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     match &app.state {
         AppState::Welcome => {
-            let p = Paragraph::new("Welcome to Slate!\n\nThis will install Arch Linux with Btrfs.\n\nPress Enter to begin.")
+            let p = Paragraph::new("Welcome to Slate!\n\nThis will install an opinionated Arch/Hyprland Desktop.\n\nPress Enter to begin.")
                 .block(Block::default().borders(Borders::ALL));
             f.render_widget(p, chunks[1]);
         }
@@ -373,11 +399,13 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .highlight_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
             f.render_stateful_widget(list, sub_chunks[1], &mut app.list_state);
         }
-        AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
+        AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail => {
             let prompt = match app.state {
                 AppState::UserSetupHostname => "Hostname:",
                 AppState::UserSetupUsername => "Username:",
                 AppState::UserSetupPassword => "Password:",
+                AppState::UserSetupGitName => "Git Username (Optional, Enter to skip):",
+                AppState::UserSetupGitEmail => "Git Email (Optional, Enter to skip):",
                 _ => "",
             };
             let text = if app.state == AppState::UserSetupPassword { "*".repeat(app.input.len()) } else { app.input.clone() };
@@ -386,14 +414,16 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
         AppState::Confirmation => {
              let text = format!(
-                 "Configuration Summary:\n\nDisk: {}\nKeymap: {}\nTimezone: {}\nHostname: {}\nUser: {}\n\nPress Enter to CONFIRM and WIPE DISK.",
+                 "Opinionated Configuration Summary:\n\nDisk: {}\nKeymap: {}\nTimezone: {}\nHostname: {}\nUser: {}\n\nDesktop: Hyprland + Zsh + Modern CLI Extras\nGit Config: {} <{}>\n\nPress Enter to CONFIRM and INSTALL.",
                  app.devices[app.selected_disk.unwrap()].path,
                  app.user_info.keymap,
                  app.user_info.timezone,
                  app.user_info.hostname,
-                 app.user_info.username
+                 app.user_info.username,
+                 if app.user_info.git_name.is_empty() { "Skipped" } else { &app.user_info.git_name },
+                 if app.user_info.git_email.is_empty() { "Skipped" } else { &app.user_info.git_email }
              );
-             let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Confirmation"));
+             let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Final Confirmation"));
              f.render_widget(p, chunks[1]);
         }
         AppState::Installing | AppState::Finished => {
@@ -424,6 +454,6 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    let help = Paragraph::new("Arrows: Scroll | Type: Search | Enter: Select | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
+    let help = Paragraph::new("Arrows: Scroll | Type: Search | Enter: Select/Skip | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[2]);
 }
