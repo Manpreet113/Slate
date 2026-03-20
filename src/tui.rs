@@ -8,7 +8,7 @@ use crossterm::{
 use ratatui::{
     backend::{CrosstermBackend, Backend},
     layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge, Wrap},
     Frame, Terminal,
     prelude::Stylize,
 };
@@ -148,15 +148,13 @@ where
         terminal.draw(|f| ui(f, &mut app))?;
 
         // Check for updates from installer thread
-        if app.state == AppState::Installing {
-            if let Some(ref rx) = app.rx {
-                while let Ok(msg) = rx.try_recv() {
-                    match msg {
-                        InstallMsg::Log(l) => app.logs.push(l),
-                        InstallMsg::Progress(p) => app.progress = p,
-                        InstallMsg::Finished => app.state = AppState::Finished,
-                        InstallMsg::Error(e) => app.state = AppState::Error(e),
-                    }
+        if let Some(ref rx) = app.rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    InstallMsg::Log(l) => app.logs.push(l),
+                    InstallMsg::Progress(p) => app.progress = p,
+                    InstallMsg::Finished => app.state = AppState::Finished,
+                    InstallMsg::Error(e) => app.state = AppState::Error(e),
                 }
             }
         }
@@ -292,17 +290,27 @@ fn ui(f: &mut Frame, app: &mut App) {
              let p = Paragraph::new("Ready to install. This will wipe the selected disk.\n\nPress Enter to CONFIRM.").block(Block::default().borders(Borders::ALL));
              f.render_widget(p, chunks[1]);
         }
-        AppState::Installing => {
+        AppState::Installing | AppState::Finished => {
             let install_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
-            let gauge = Gauge::default().block(Block::default().borders(Borders::ALL).title("Installing...")).percent(app.progress);
+            
+            let status_title = if app.state == AppState::Finished { "INSTALLATION COMPLETE!" } else { "Installing..." };
+            let gauge = Gauge::default().block(Block::default().borders(Borders::ALL).title(status_title)).percent(app.progress).gauge_style(if app.state == AppState::Finished { ratatui::style::Style::default().fg(ratatui::style::Color::Green) } else { ratatui::style::Style::default().fg(ratatui::style::Color::Cyan) });
             f.render_widget(gauge, install_chunks[0]);
-            let log_items: Vec<ListItem> = app.logs.iter().rev().take(15).map(|l| ListItem::new(l.as_str())).collect();
-            let list = List::new(log_items).block(Block::default().borders(Borders::ALL).title("Logs"));
-            f.render_widget(list, install_chunks[1]);
-        }
-        AppState::Finished => {
-            let p = Paragraph::new("INSTALLATION COMPLETE!\n\nYou can now reboot.\n\nPress Enter to exit.").block(Block::default().borders(Borders::ALL));
-            f.render_widget(p, chunks[1]);
+            
+            let log_text = app.logs.iter().rev().take(30).map(|l| l.as_str()).collect::<Vec<&str>>().join("\n");
+            let p = Paragraph::new(log_text)
+                .block(Block::default().borders(Borders::ALL).title("Logs"))
+                .wrap(Wrap { trim: false });
+            f.render_widget(p, install_chunks[1]);
+            
+            if app.state == AppState::Finished {
+                let overlay = Rect::new(size.width / 4, size.height / 3, size.width / 2, size.height / 3);
+                f.render_widget(ratatui::widgets::Clear, overlay);
+                let p = Paragraph::new("\nSUCCESS\n\nInstallation Finished.\nYou can now reboot.\n\nPress Enter or 'q' to exit.")
+                    .block(Block::default().borders(Borders::ALL).fg(ratatui::style::Color::Green))
+                    .alignment(ratatui::layout::Alignment::Center);
+                f.render_widget(p, overlay);
+            }
         }
         AppState::Error(e) => {
             let p = Paragraph::new(format!("ERROR: {}\n\nPress Enter to exit.", e)).block(Block::default().borders(Borders::ALL).fg(ratatui::style::Color::Red));
@@ -313,3 +321,5 @@ fn ui(f: &mut Frame, app: &mut App) {
     let help = Paragraph::new("Enter: Select/Continue | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[2]);
 }
+
+use ratatui::layout::Rect;

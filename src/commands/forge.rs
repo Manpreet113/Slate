@@ -182,7 +182,13 @@ impl<'a> MountGuard<'a> {
 
     fn mount(&mut self, source: &str, target: &str, options: &[&str]) -> Result<()> {
         let _ = self.tx.send(InstallMsg::Log(format!("Mounting {} -> {}", source, target)));
-        let status = Command::new("mount").args(options).arg(source).arg(target).status()?;
+        let status = Command::new("mount")
+            .args(options)
+            .arg(source)
+            .arg(target)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
         if !status.success() { bail!("Mount failed"); }
         self.mounts.push(PathBuf::from(target));
         Ok(())
@@ -190,7 +196,11 @@ impl<'a> MountGuard<'a> {
 
     fn unmount(&mut self, target: &str) -> Result<()> {
         let _ = self.tx.send(InstallMsg::Log(format!("Unmounting {}", target)));
-        let status = Command::new("umount").arg(target).status()?;
+        let status = Command::new("umount")
+            .arg(target)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
         if !status.success() { bail!("Unmount failed"); }
         if let Some(pos) = self.mounts.iter().position(|p| p == Path::new(target)) {
             self.mounts.remove(pos);
