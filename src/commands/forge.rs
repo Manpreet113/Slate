@@ -102,19 +102,18 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
     
     fs::create_dir_all("/mnt/home")?;
     fs::create_dir_all("/mnt/var/cache/pacman/pkg")?;
-    fs::create_dir_all("/mnt/boot/EFI")?;
 
     guard.mount(&root_part, "/mnt/home", &["-o", &format!("subvol=@home,{}", mount_opts)])?;
     guard.mount(&root_part, "/mnt/var/cache/pacman/pkg", &["-o", &format!("subvol=@pkg,{}", mount_opts)])?;
 
     let efi_part = resolve_partition(device, 1);
-    guard.mount(&efi_part, "/mnt/boot/EFI", &[])?;
+    guard.mount(&efi_part, "/mnt/boot", &[])?;
 
     Ok(())
 }
 
 fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
-    run_cmd_captured("pacstrap", &["-K", "/mnt", "base", "base-devel", "linux", "linux-firmware", "btrfs-progs", "networkmanager"], tx)?;
+    run_cmd_captured("pacstrap", &["-K", "/mnt", "base", "base-devel", "linux", "linux-firmware", "intel-ucode", "amd-ucode", "btrfs-progs", "networkmanager"], tx)?;
 
     tx.send(InstallMsg::Log("Generating fstab...".to_string()))?;
     let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
