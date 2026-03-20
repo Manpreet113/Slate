@@ -209,12 +209,9 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     }
 
     // AUR Packages via Ax
-    println!("  > Installing VS Code via Ax (AUR)...");
-    // We need to run ax as the user, not root, for AUR stuff usually, 
-    // but since we're in chroot and ax is at /usr/local/bin/ax, let's try direct.
-    // If ax requires a non-root user, we'd use 'sudo -u username ax ...'
+    println!("  > Installing AUR Packages (tuigreet, vscode) via Ax...");
     let _ = Command::new("sudo")
-        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "--noconfirm"])
+        .args(["-u", &config.username, "ax", "-S", "tuigreet", "visual-studio-code-bin", "--noconfirm"])
         .status();
 
     Ok(())
