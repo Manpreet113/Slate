@@ -60,6 +60,10 @@ fn configure_base(config: &UserInfo) -> Result<()> {
     // Keymap
     fs::write("/etc/vconsole.conf", format!("KEYMAP={}\n", config.keymap))?;
 
+    // Time & NTP
+    run_command("hwclock", &["--systohc"])?;
+    run_command("systemctl", &["enable", "systemd-timesyncd"])?;
+
     Ok(())
 }
 
