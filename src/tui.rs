@@ -1,48 +1,315 @@
 use crate::system::BlockDevice;
-use dialoguer::{theme::ColorfulTheme, Input, Password, Select};
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::{CrosstermBackend, Backend},
+    layout::{Constraint, Direction, Layout},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge},
+    Frame, Terminal,
+    prelude::Stylize,
+};
+use serde::{Deserialize, Serialize};
+use std::io;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserInfo {
+    pub hostname: String,
     pub username: String,
     pub password: String,
-    pub hostname: String,
 }
 
-pub fn select_disk(devices: &[BlockDevice]) -> Result<BlockDevice> {
-    let items: Vec<String> = devices
-        .iter()
-        .map(|d| format!("{} - {} ({})", d.path, d.model, d.size))
-        .collect();
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select target disk for installation")
-        .default(0)
-        .items(&items[..])
-        .interact()?;
-
-    Ok(devices[selection].clone())
+pub enum InstallMsg {
+    Log(String),
+    Progress(u16),
+    Finished,
+    Error(String),
 }
 
-pub fn get_user_info() -> Result<UserInfo> {
-    let hostname: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter hostname")
-        .default("archlinux".into())
-        .interact_text()?;
+#[derive(PartialEq)]
+pub enum AppState {
+    Welcome,
+    SelectingDisk,
+    UserSetupHostname,
+    UserSetupUsername,
+    UserSetupPassword,
+    Confirmation,
+    Installing,
+    Finished,
+    Error(String),
+}
 
-    let username: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter username")
-        .interact_text()?;
+pub struct App {
+    pub state: AppState,
+    pub devices: Vec<BlockDevice>,
+    pub selected_disk: Option<usize>,
+    pub disk_list_state: ListState,
+    pub user_info: UserInfo,
+    pub input: String,
+    pub logs: Vec<String>,
+    pub progress: u16,
+    pub rx: Option<Receiver<InstallMsg>>,
+}
 
-    let password = Password::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter user password")
-        .with_confirmation("Confirm password", "Passwords do not match")
-        .interact()?;
+impl App {
+    pub fn new(devices: Vec<BlockDevice>) -> Self {
+        let mut disk_list_state = ListState::default();
+        if !devices.is_empty() {
+            disk_list_state.select(Some(0));
+        }
 
-    Ok(UserInfo {
-        username,
-        password,
-        hostname,
-    })
+        Self {
+            state: AppState::Welcome,
+            devices,
+            selected_disk: None,
+            disk_list_state,
+            user_info: UserInfo::default(),
+            input: String::new(),
+            logs: vec!["[System] App Initialized".to_string()],
+            progress: 0,
+            rx: None,
+        }
+    }
+
+    pub fn next_disk(&mut self) {
+        let i = match self.disk_list_state.selected() {
+            Some(i) => {
+                if i >= self.devices.len() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.disk_list_state.select(Some(i));
+    }
+
+    pub fn previous_disk(&mut self) {
+        let i = match self.disk_list_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.devices.len() - 1
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.disk_list_state.select(Some(i));
+    }
+}
+
+pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
+where
+    F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
+{
+    // Terminal setup
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::new(devices);
+    let (tx, rx) = mpsc::channel();
+    app.rx = Some(rx);
+
+    let res = run_loop(&mut terminal, app, tx, Some(forge_fn));
+
+    // restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    res
+}
+
+fn run_loop<B: Backend, F>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+    tx: Sender<InstallMsg>,
+    mut forge_fn: Option<F>,
+) -> Result<()>
+where
+    F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
+    B::Error: std::fmt::Display + Send + Sync + 'static,
+{
+    loop {
+        terminal.draw(|f| ui(f, &mut app))?;
+
+        // Check for updates from installer thread
+        if app.state == AppState::Installing {
+            if let Some(ref rx) = app.rx {
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        InstallMsg::Log(l) => app.logs.push(l),
+                        InstallMsg::Progress(p) => app.progress = p,
+                        InstallMsg::Finished => app.state = AppState::Finished,
+                        InstallMsg::Error(e) => app.state = AppState::Error(e),
+                    }
+                }
+            }
+        }
+
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                match app.state {
+                    AppState::Welcome => {
+                        if key.code == KeyCode::Enter {
+                            app.state = AppState::SelectingDisk;
+                        } else if key.code == KeyCode::Char('q') {
+                            return Ok(());
+                        }
+                    }
+                    AppState::SelectingDisk => match key.code {
+                        KeyCode::Down => app.next_disk(),
+                        KeyCode::Up => app.previous_disk(),
+                        KeyCode::Enter => {
+                            if let Some(i) = app.disk_list_state.selected() {
+                                app.selected_disk = Some(i);
+                                app.state = AppState::UserSetupHostname;
+                            }
+                        }
+                        _ => {}
+                    },
+                    AppState::UserSetupHostname => match key.code {
+                        KeyCode::Enter => {
+                            app.user_info.hostname = app.input.drain(..).collect();
+                            app.state = AppState::UserSetupUsername;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::SelectingDisk,
+                        _ => {}
+                    },
+                    AppState::UserSetupUsername => match key.code {
+                        KeyCode::Enter => {
+                            app.user_info.username = app.input.drain(..).collect();
+                            app.state = AppState::UserSetupPassword;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::UserSetupHostname,
+                        _ => {}
+                    },
+                    AppState::UserSetupPassword => match key.code {
+                        KeyCode::Enter => {
+                            app.user_info.password = app.input.drain(..).collect();
+                            app.state = AppState::Confirmation;
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => app.state = AppState::UserSetupUsername,
+                        _ => {}
+                    },
+                    AppState::Confirmation => match key.code {
+                        KeyCode::Enter => {
+                            let device = app.devices[app.selected_disk.unwrap()].clone();
+                            let info = app.user_info.clone();
+                            app.state = AppState::Installing;
+                            let tx_clone = tx.clone();
+                            if let Some(f) = forge_fn.take() {
+                                std::thread::spawn(move || {
+                                    f(device, info, tx_clone);
+                                });
+                            }
+                        }
+                        KeyCode::Char('n') | KeyCode::Esc => app.state = AppState::SelectingDisk,
+                        _ => {}
+                    },
+                    AppState::Finished => {
+                        if key.code == KeyCode::Enter || key.code == KeyCode::Char('q') {
+                            return Ok(());
+                        }
+                    }
+                    AppState::Error(_) => {
+                        if key.code == KeyCode::Enter || key.code == KeyCode::Char('q') {
+                            return Ok(());
+                        }
+                    }
+                    AppState::Installing => {}
+                }
+                
+                // Allow exit via Q in any state (except inputting)
+                if key.code == KeyCode::Char('q') && app.state != AppState::UserSetupHostname && app.state != AppState::UserSetupUsername && app.state != AppState::UserSetupPassword {
+                     return Ok(());
+                }
+            }
+        }
+    }
+}
+
+fn ui(f: &mut Frame, app: &mut App) {
+    let size = f.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
+        ])
+        .split(size);
+
+    let title = Paragraph::new("SLATE ARCH LINUX INSTALLER")
+        .block(Block::default().borders(Borders::ALL))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(title, chunks[0]);
+
+    match &app.state {
+        AppState::Welcome => {
+            let p = Paragraph::new("Welcome to Slate!\n\nThis will install Arch Linux with Btrfs.\n\nPress Enter to begin.")
+                .block(Block::default().borders(Borders::ALL));
+            f.render_widget(p, chunks[1]);
+        }
+        AppState::SelectingDisk => {
+            let items: Vec<ListItem> = app.devices.iter().map(|d| ListItem::new(format!("{} | {} | {}", d.path, d.size, d.model))).collect();
+            let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Select Disk")).highlight_symbol(">> ");
+            f.render_stateful_widget(list, chunks[1], &mut app.disk_list_state);
+        }
+        AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword => {
+            let prompt = match app.state {
+                AppState::UserSetupHostname => "Hostname:",
+                AppState::UserSetupUsername => "Username:",
+                AppState::UserSetupPassword => "Password:",
+                _ => "",
+            };
+            let text = if app.state == AppState::UserSetupPassword { "*".repeat(app.input.len()) } else { app.input.clone() };
+            let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(prompt));
+            f.render_widget(p, chunks[1]);
+        }
+        AppState::Confirmation => {
+             let p = Paragraph::new("Ready to install. This will wipe the selected disk.\n\nPress Enter to CONFIRM.").block(Block::default().borders(Borders::ALL));
+             f.render_widget(p, chunks[1]);
+        }
+        AppState::Installing => {
+            let install_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
+            let gauge = Gauge::default().block(Block::default().borders(Borders::ALL).title("Installing...")).percent(app.progress);
+            f.render_widget(gauge, install_chunks[0]);
+            let log_items: Vec<ListItem> = app.logs.iter().rev().take(15).map(|l| ListItem::new(l.as_str())).collect();
+            let list = List::new(log_items).block(Block::default().borders(Borders::ALL).title("Logs"));
+            f.render_widget(list, install_chunks[1]);
+        }
+        AppState::Finished => {
+            let p = Paragraph::new("INSTALLATION COMPLETE!\n\nYou can now reboot.\n\nPress Enter to exit.").block(Block::default().borders(Borders::ALL));
+            f.render_widget(p, chunks[1]);
+        }
+        AppState::Error(e) => {
+            let p = Paragraph::new(format!("ERROR: {}\n\nPress Enter to exit.", e)).block(Block::default().borders(Borders::ALL).fg(ratatui::style::Color::Red));
+            f.render_widget(p, chunks[1]);
+        }
+    }
+
+    let help = Paragraph::new("Enter: Select/Continue | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(help, chunks[2]);
 }

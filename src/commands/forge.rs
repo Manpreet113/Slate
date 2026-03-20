@@ -1,274 +1,210 @@
 use crate::preflight;
 use crate::system;
-use crate::tui;
+use crate::tui::{self, InstallMsg, UserInfo};
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::Sender;
 
 /// The entry point for `slate install`
 pub fn forge() -> Result<()> {
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  SLATE: ARCH LINUX INSTALLER");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-    // 1. Disk Selection
+    // 1. Discover devices
     let devices = system::list_block_devices().context("Failed to list block devices")?;
     if devices.is_empty() {
         bail!("No block devices found for installation!");
     }
-    let selected_device = tui::select_disk(&devices)?;
-    let device = &selected_device.path;
 
-    // 2. User Info Collection
-    let user_info = tui::get_user_info()?;
+    // 2. Run the Ratatui Installer
+    tui::run_installer(devices, background_installer)?;
 
-    // 3. Safety Check (Preflight)
-    preflight::run(device)?;
+    Ok(())
+}
 
-    // 4. Partitioning
-    cleansing(device)?;
+/// The actual installation logic running in a background thread
+fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Sender<InstallMsg>) {
+    let dev_path = &device.path;
 
-    // Instantiate MountGuard to manage cleanup
-    let mut guard = MountGuard::new();
+    let res = (|| -> Result<()> {
+        tx.send(InstallMsg::Log("Initializing Preflight Checks...".to_string()))?;
+        tx.send(InstallMsg::Progress(2))?;
 
-    // 5. Btrfs Subvolumes & Mounting
-    subvolume_dance(device, &mut guard)?;
+        // 1. Preflight
+        let preflight_logs = preflight::run_checks(dev_path)?;
+        for log in preflight_logs {
+            tx.send(InstallMsg::Log(log))?;
+        }
+        tx.send(InstallMsg::Progress(10))?;
 
-    // 6. System bootstrap
-    injection()?;
+        // 2. Partitioning
+        tx.send(InstallMsg::Log("Partitioning disk...".to_string()))?;
+        cleansing(dev_path, &tx)?;
+        tx.send(InstallMsg::Progress(25))?;
 
-    // 7. Save user info for chroot stage
-    let user_info_path = Path::new("/mnt/root/user_info.json");
-    let user_info_json = serde_json::to_string(&user_info)?;
-    fs::write(user_info_path, user_info_json)?;
+        // 3. Btrfs Setup
+        let mut guard = MountGuard::new(&tx);
+        subvolume_dance(dev_path, &mut guard, &tx)?;
+        tx.send(InstallMsg::Progress(40))?;
 
-    println!("\n[Forge] Phase 7: Entering Chroot...");
-    let status = Command::new("arch-chroot")
-        .args(["/mnt", "slate", "chroot-stage"])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
+        // 4. Injection (Pacstrap)
+        injection(&tx)?;
+        tx.send(InstallMsg::Progress(70))?;
 
-    if !status.success() {
-        bail!("Chroot stage failed");
+        // 5. Save User Info
+        tx.send(InstallMsg::Log("Saving user configuration...".to_string()))?;
+        let user_info_path = Path::new("/mnt/root/user_info.json");
+        let user_info_json = serde_json::to_string(&user_info)?;
+        fs::write(user_info_path, user_info_json)?;
+
+        // 6. Chroot Stage
+        tx.send(InstallMsg::Log("Entering Chroot Stage...".to_string()))?;
+        run_cmd_captured("arch-chroot", &["/mnt", "slate", "chroot-stage"], &tx)?;
+
+        let _ = fs::remove_file(user_info_path);
+        tx.send(InstallMsg::Progress(100))?;
+        tx.send(InstallMsg::Finished)?;
+        
+        Ok(())
+    })();
+
+    if let Err(e) = res {
+        let _ = tx.send(InstallMsg::Error(format!("{:?}", e)));
     }
-
-    // Cleanup user info after successful chroot
-    let _ = fs::remove_file(user_info_path);
-
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  FORGE COMPLETE.");
-    println!("  System is ready. Reboot when ready.");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    Ok(())
 }
 
-/// 4. The Cleansing: Wipe and partition
-fn cleansing(device: &str) -> Result<()> {
-    println!("\n[Forge] Phase 4: Partitioning...");
+fn cleansing(device: &str, tx: &Sender<InstallMsg>) -> Result<()> {
+    run_cmd_captured("sgdisk", &["--zap-all", device], tx)?;
+    run_cmd_captured("sgdisk", &["-n", "1:0:+1G", "-t", "1:ef00", device], tx)?;
+    run_cmd_captured("sgdisk", &["-n", "2:0:0", "-t", "2:8300", device], tx)?;
 
-    // Wipe partition table
-    run_command("sgdisk", &["--zap-all", device])?;
-
-    // Create EFI partition (1GB, type ef00)
-    run_command("sgdisk", &["-n", "1:0:+1G", "-t", "1:ef00", device])?;
-
-    // Create Root partition (Remaining space, type 8300 - Linux Filesystem)
-    run_command("sgdisk", &["-n", "2:0:0", "-t", "2:8300", device])?;
-
-    // Format EFI
     let efi_part = resolve_partition(device, 1);
-    println!("  > Formatting EFI: {}", efi_part);
-    run_command("mkfs.vfat", &["-F32", "-n", "EFI", &efi_part])?;
+    run_cmd_captured("mkfs.vfat", &["-F32", "-n", "EFI", &efi_part], tx)?;
 
-    // Format Btrfs Root
     let root_part = resolve_partition(device, 2);
-    println!("  > Formatting Btrfs: {}", root_part);
-    run_command("mkfs.btrfs", &["-f", "-L", "Arch", &root_part])?;
+    run_cmd_captured("mkfs.btrfs", &["-f", "-L", "Arch", &root_part], tx)?;
 
     Ok(())
 }
 
-/// 5. The Subvolume Dance: Btrfs Layout
-fn subvolume_dance(device: &str, guard: &mut MountGuard) -> Result<()> {
-    println!("\n[Forge] Phase 5: The Subvolume Dance...");
+fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>) -> Result<()> {
     let root_part = resolve_partition(device, 2);
-
-    // Mount root temporarily to create subvolumes
     guard.mount(&root_part, "/mnt", &[])?;
 
-    println!("  > Creating Subvolumes...");
-    run_command("btrfs", &["subvolume", "create", "/mnt/@"])?;
-    run_command("btrfs", &["subvolume", "create", "/mnt/@home"])?;
-    run_command("btrfs", &["subvolume", "create", "/mnt/@pkg"])?;
+    run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@"], tx)?;
+    run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@home"], tx)?;
+    run_cmd_captured("btrfs", &["subvolume", "create", "/mnt/@pkg"], tx)?;
 
-    // Unmount root
     guard.unmount("/mnt")?;
 
-    println!("  > Mounting Subvolumes...");
     let mount_opts = "rw,noatime,compress=zstd,discard=async,space_cache=v2";
-
-    // Mount Root (@)
-    guard.mount(
-        &root_part,
-        "/mnt",
-        &["-o", &format!("subvol=@,{}", mount_opts)],
-    )?;
-
-    // Create directories
+    guard.mount(&root_part, "/mnt", &["-o", &format!("subvol=@,{}", mount_opts)])?;
+    
     fs::create_dir_all("/mnt/home")?;
     fs::create_dir_all("/mnt/var/cache/pacman/pkg")?;
-    fs::create_dir_all("/mnt/var/log")?;
     fs::create_dir_all("/mnt/boot/EFI")?;
 
-    // Mount @home
-    guard.mount(
-        &root_part,
-        "/mnt/home",
-        &["-o", &format!("subvol=@home,{}", mount_opts)],
-    )?;
+    guard.mount(&root_part, "/mnt/home", &["-o", &format!("subvol=@home,{}", mount_opts)])?;
+    guard.mount(&root_part, "/mnt/var/cache/pacman/pkg", &["-o", &format!("subvol=@pkg,{}", mount_opts)])?;
 
-    // Mount @pkg
-    guard.mount(
-        &root_part,
-        "/mnt/var/cache/pacman/pkg",
-        &["-o", &format!("subvol=@pkg,{}", mount_opts)],
-    )?;
-
-    // Mount EFI
     let efi_part = resolve_partition(device, 1);
     guard.mount(&efi_part, "/mnt/boot/EFI", &[])?;
 
     Ok(())
 }
 
-struct MountGuard {
-    mounts: Vec<PathBuf>,
+fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
+    run_cmd_captured("pacstrap", &["-K", "/mnt", "base", "base-devel", "linux", "linux-firmware", "btrfs-progs", "networkmanager"], tx)?;
+
+    tx.send(InstallMsg::Log("Generating fstab...".to_string()))?;
+    let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
+    fs::write("/mnt/etc/fstab", output.stdout)?;
+
+    tx.send(InstallMsg::Log("Injecting binaries...".to_string()))?;
+    let current_exe = std::env::current_exe()?;
+    fs::copy(&current_exe, "/mnt/usr/local/bin/slate")?;
+    
+    run_cmd_captured("curl", &["-L", "https://github.com/manpreet113/ax/releases/latest/download/ax", "-o", "/mnt/usr/local/bin/ax"], tx)?;
+    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate"], tx)?;
+
+    Ok(())
 }
 
-impl MountGuard {
-    fn new() -> Self {
-        Self { mounts: Vec::new() }
+fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result<()> {
+    let _ = tx.send(InstallMsg::Log(format!("$ {} {}", cmd, args.join(" "))));
+    
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child.stdout.take().context("Failed to open stdout")?;
+    let stderr = child.stderr.take().context("Failed to open stderr")?;
+    
+    let tx_out = tx.clone();
+    let tx_err = tx.clone();
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = tx_out.send(InstallMsg::Log(l));
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = tx_err.send(InstallMsg::Log(format!("[Err] {}", l)));
+            }
+        }
+    });
+
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("Command failed: {}", cmd);
+    }
+    Ok(())
+}
+
+struct MountGuard<'a> {
+    mounts: Vec<PathBuf>,
+    tx: &'a Sender<InstallMsg>,
+}
+
+impl<'a> MountGuard<'a> {
+    fn new(tx: &'a Sender<InstallMsg>) -> Self {
+        Self { mounts: Vec::new(), tx }
     }
 
     fn mount(&mut self, source: &str, target: &str, options: &[&str]) -> Result<()> {
-        let status = Command::new("mount")
-            .args(options)
-            .arg(source)
-            .arg(target)
-            .status()?;
-
-        if !status.success() {
-            bail!("Failed to mount {} to {}", source, target);
-        }
-
+        let _ = self.tx.send(InstallMsg::Log(format!("Mounting {} -> {}", source, target)));
+        let status = Command::new("mount").args(options).arg(source).arg(target).status()?;
+        if !status.success() { bail!("Mount failed"); }
         self.mounts.push(PathBuf::from(target));
         Ok(())
     }
 
     fn unmount(&mut self, target: &str) -> Result<()> {
+        let _ = self.tx.send(InstallMsg::Log(format!("Unmounting {}", target)));
         let status = Command::new("umount").arg(target).status()?;
-
-        if !status.success() {
-            bail!("Failed to unmount {}", target);
-        }
-
-        // Remove from list so we don't double unmount on drop
-        if let Some(pos) = self.mounts.iter().rposition(|p| p == Path::new(target)) {
+        if !status.success() { bail!("Unmount failed"); }
+        if let Some(pos) = self.mounts.iter().position(|p| p == Path::new(target)) {
             self.mounts.remove(pos);
         }
         Ok(())
     }
 }
 
-impl Drop for MountGuard {
+impl<'a> Drop for MountGuard<'a> {
     fn drop(&mut self) {
-        // Unmount in reverse order
-        for mount in self.mounts.iter().rev() {
-            println!("  [Cleanup] Unmounting {}", mount.display());
-            let _ = Command::new("umount").arg("-l").arg(mount).status();
+        for m in self.mounts.iter().rev() {
+            let _ = Command::new("umount").arg("-l").arg(m).status();
         }
     }
-}
-
-/// 6. The Injection: Bootstrap system
-fn injection() -> Result<()> {
-    println!("\n[Forge] Phase 6: The Injection...");
-
-    println!("  > Installing Base System...");
-    let status = Command::new("pacstrap")
-        .args([
-            "-K",
-            "/mnt",
-            "base",
-            "base-devel",
-            "linux",
-            "linux-firmware",
-            "btrfs-progs",
-            "git",
-            "vim",
-            "intel-ucode",
-            "amd-ucode",
-            "networkmanager",
-        ])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
-
-    if !status.success() {
-        bail!("Pacstrap failed");
-    }
-
-    println!("  > Generating Fstab...");
-    let output = Command::new("genfstab").arg("-U").arg("/mnt").output()?;
-
-    if !output.status.success() {
-        bail!("genfstab failed");
-    }
-
-    let fstab_path = Path::new("/mnt/etc/fstab");
-    fs::write(fstab_path, output.stdout)?;
-
-    println!("  > Injecting Slate Binary...");
-    let current_exe = std::env::current_exe()?;
-    let target_dir = Path::new("/mnt/usr/local/bin");
-    fs::create_dir_all(target_dir)?;
-    fs::copy(&current_exe, target_dir.join("slate"))?;
-    run_command("chmod", &["+x", "/mnt/usr/local/bin/slate"])?;
-
-    println!("  > Injecting ax Binary...");
-    let ax_url = "https://github.com/manpreet113/ax/releases/latest/download/ax";
-    let ax_p = target_dir.join("ax");
-    run_command(
-        "curl",
-        &["-L", ax_url, "-o", ax_p.to_string_lossy().as_ref()],
-    )?;
-    run_command("chmod", &["+x", "/mnt/usr/local/bin/ax"])?;
-
-    Ok(())
-}
-
-fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
-    println!("  $ {} {}", cmd, args.join(" "));
-    let output = Command::new(cmd)
-        .args(args)
-        .output()
-        .context(format!("Failed to execute {}", cmd))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "Command failed: {} {}\nError: {}",
-            cmd,
-            args.join(" "),
-            stderr
-        );
-    }
-    Ok(())
 }
 
 fn resolve_partition(device: &str, part_num: i32) -> String {
