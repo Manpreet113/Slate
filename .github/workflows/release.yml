@@ -1,0 +1,42 @@
+name: Pre-release
+
+on:
+  push:
+    branches:
+      - tui-installer
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    
+    steps:
+      - name: Install Git
+        run: |
+          pacman -Syu --noconfirm git base-devel rustup
+          rustup default stable
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Create Pre-release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: tui-installer-latest
+          name: "Slate TUI Installer (Latest)"
+          prerelease: true
+          files: target/release/slate
+          body: |
+            Automated pre-release for the `tui-installer` branch.
+            
+            **Commit**: ${{ github.sha }}
+            **Build Date**: $(date)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

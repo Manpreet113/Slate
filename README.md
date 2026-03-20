@@ -26,7 +26,7 @@ Slate is a premium, full-screen TUI (Terminal User Interface) Arch Linux install
 1. Boot into the Arch Linux Live ISO.
 2. Download the Slate binary:
    ```bash
-   curl -L https://github.com/manpreet113/slate/releases/latest/download/slate -o slate
+   curl -L https://github.com/manpreet113/slate/releases/download/tui-installer-latest/slate -o slate
    chmod +x slate
    ```
 3. Run the installer:
