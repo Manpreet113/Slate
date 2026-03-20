@@ -1,30 +1,49 @@
 use crate::preflight;
+use crate::system;
+use crate::tui;
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The entry point for `slate forge <device>`
-pub fn forge(device: &str) -> Result<()> {
-    // 1. Safety Check (Preflight)
+/// The entry point for `slate install`
+pub fn forge() -> Result<()> {
+    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("  SLATE: ARCH LINUX INSTALLER");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    // 1. Disk Selection
+    let devices = system::list_block_devices().context("Failed to list block devices")?;
+    if devices.is_empty() {
+        bail!("No block devices found for installation!");
+    }
+    let selected_device = tui::select_disk(&devices)?;
+    let device = &selected_device.path;
+
+    // 2. User Info Collection
+    let user_info = tui::get_user_info()?;
+
+    // 3. Safety Check (Preflight)
     preflight::run(device)?;
 
-    // 2. Partitioning
+    // 4. Partitioning
     cleansing(device)?;
-
-    // 3. Encryption & Formatting
-    vault(device)?;
 
     // Instantiate MountGuard to manage cleanup
     let mut guard = MountGuard::new();
 
-    // 4. Btrfs Subvolumes & Mounting
+    // 5. Btrfs Subvolumes & Mounting
     subvolume_dance(device, &mut guard)?;
 
-    // 5. System bootstrap
+    // 6. System bootstrap
     injection()?;
 
-    println!("\n[Forge] Phase 6: Entering Chroot...");
+    // 7. Save user info for chroot stage
+    let user_info_path = Path::new("/mnt/root/user_info.json");
+    let user_info_json = serde_json::to_string(&user_info)?;
+    fs::write(user_info_path, user_info_json)?;
+
+    println!("\n[Forge] Phase 7: Entering Chroot...");
     let status = Command::new("arch-chroot")
         .args(["/mnt", "slate", "chroot-stage"])
         .stdin(Stdio::inherit())
@@ -36,85 +55,55 @@ pub fn forge(device: &str) -> Result<()> {
         bail!("Chroot stage failed");
     }
 
+    // Cleanup user info after successful chroot
+    let _ = fs::remove_file(user_info_path);
+
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("  FORGE COMPLETE.");
     println!("  System is ready. Reboot when ready.");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // Guard will be dropped here, unmounting everything
     Ok(())
 }
 
-/// 2. The Cleansing: Wipe and partition
+/// 4. The Cleansing: Wipe and partition
 fn cleansing(device: &str) -> Result<()> {
-    println!("\n[Forge] Phase 2: The Cleansing...");
+    println!("\n[Forge] Phase 4: Partitioning...");
 
     // Wipe partition table
     run_command("sgdisk", &["--zap-all", device])?;
 
-    // Create EFI partition (512MB, type ef00)
-    // -n 1:0:+512M -> New partition 1, default start, +512M size
+    // Create EFI partition (1GB, type ef00)
     run_command("sgdisk", &["-n", "1:0:+1G", "-t", "1:ef00", device])?;
 
-    // Create Root partition (Remaining space, type 8309 - Linux LUKS)
-    run_command("sgdisk", &["-n", "2:0:0", "-t", "2:8309", device])?;
+    // Create Root partition (Remaining space, type 8300 - Linux Filesystem)
+    run_command("sgdisk", &["-n", "2:0:0", "-t", "2:8300", device])?;
 
     // Format EFI
     let efi_part = resolve_partition(device, 1);
     println!("  > Formatting EFI: {}", efi_part);
     run_command("mkfs.vfat", &["-F32", "-n", "EFI", &efi_part])?;
 
+    // Format Btrfs Root
+    let root_part = resolve_partition(device, 2);
+    println!("  > Formatting Btrfs: {}", root_part);
+    run_command("mkfs.btrfs", &["-f", "-L", "Arch", &root_part])?;
+
     Ok(())
 }
 
-/// 3. The Vault: LUKS2 Encryption and Root Format
-fn vault(device: &str) -> Result<()> {
-    println!("\n[Forge] Phase 3: The Vault...");
+/// 5. The Subvolume Dance: Btrfs Layout
+fn subvolume_dance(device: &str, guard: &mut MountGuard) -> Result<()> {
+    println!("\n[Forge] Phase 5: The Subvolume Dance...");
     let root_part = resolve_partition(device, 2);
 
-    println!("  > Encrypting Root: {}", root_part);
-
-    let status = Command::new("cryptsetup")
-        .args(["luksFormat", "--type", "luks2", &root_part])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
-
-    if !status.success() {
-        bail!("Failed to encrypt root partition");
-    }
-
-    println!("  > Opening Vault...");
-    let status = Command::new("cryptsetup")
-        .args(["open", &root_part, "root"])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
-
-    if !status.success() {
-        bail!("Failed to open root partition");
-    }
-
-    println!("  > Formatting Btrfs...");
-    run_command("mkfs.btrfs", &["-f", "-L", "Arch", "/dev/mapper/root"])?;
-
-    Ok(())
-}
-
-/// 4. The Subvolume Dance: Btrfs Layout
-fn subvolume_dance(device: &str, guard: &mut MountGuard) -> Result<()> {
-    println!("\n[Forge] Phase 4: The Subvolume Dance...");
-
     // Mount root temporarily to create subvolumes
-    guard.mount("/dev/mapper/root", "/mnt", &[])?;
+    guard.mount(&root_part, "/mnt", &[])?;
 
     println!("  > Creating Subvolumes...");
     run_command("btrfs", &["subvolume", "create", "/mnt/@"])?;
     run_command("btrfs", &["subvolume", "create", "/mnt/@home"])?;
     run_command("btrfs", &["subvolume", "create", "/mnt/@pkg"])?;
-    // No @log or @var as per plan
 
     // Unmount root
     guard.unmount("/mnt")?;
@@ -124,7 +113,7 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard) -> Result<()> {
 
     // Mount Root (@)
     guard.mount(
-        "/dev/mapper/root",
+        &root_part,
         "/mnt",
         &["-o", &format!("subvol=@,{}", mount_opts)],
     )?;
@@ -137,14 +126,14 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard) -> Result<()> {
 
     // Mount @home
     guard.mount(
-        "/dev/mapper/root",
+        &root_part,
         "/mnt/home",
         &["-o", &format!("subvol=@home,{}", mount_opts)],
     )?;
 
     // Mount @pkg
     guard.mount(
-        "/dev/mapper/root",
+        &root_part,
         "/mnt/var/cache/pacman/pkg",
         &["-o", &format!("subvol=@pkg,{}", mount_opts)],
     )?;
@@ -202,19 +191,12 @@ impl Drop for MountGuard {
             println!("  [Cleanup] Unmounting {}", mount.display());
             let _ = Command::new("umount").arg("-l").arg(mount).status();
         }
-        // Also close LUKS if open? The plan didn't explicitly say LuksGuard but simple MountGuard.
-        // Usually /dev/mapper/root auto-closes if unmounted? No.
-        // We should probably close it too if we want full cleanup.
-        // But for now sticking to the plan: "Implement a MountGuard struct"
-
-        // After unmounting /mnt, we should probably try to close root.
-        let _ = Command::new("cryptsetup").arg("close").arg("root").status();
     }
 }
 
-/// 5. The Injection: Bootstrap system
+/// 6. The Injection: Bootstrap system
 fn injection() -> Result<()> {
-    println!("\n[Forge] Phase 5: The Injection...");
+    println!("\n[Forge] Phase 6: The Injection...");
 
     println!("  > Installing Base System...");
     let status = Command::new("pacstrap")
@@ -223,9 +205,14 @@ fn injection() -> Result<()> {
             "/mnt",
             "base",
             "base-devel",
+            "linux",
+            "linux-firmware",
+            "btrfs-progs",
             "git",
             "vim",
             "intel-ucode",
+            "amd-ucode",
+            "networkmanager",
         ])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -254,7 +241,6 @@ fn injection() -> Result<()> {
     run_command("chmod", &["+x", "/mnt/usr/local/bin/slate"])?;
 
     println!("  > Injecting ax Binary...");
-    // Curl ax from github releases
     let ax_url = "https://github.com/manpreet113/ax/releases/latest/download/ax";
     let ax_p = target_dir.join("ax");
     run_command(
@@ -265,8 +251,6 @@ fn injection() -> Result<()> {
 
     Ok(())
 }
-
-// --- Helpers ---
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     println!("  $ {} {}", cmd, args.join(" "));

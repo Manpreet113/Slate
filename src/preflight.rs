@@ -62,7 +62,6 @@ fn check_mounts(device: &str) -> Result<()> {
 fn check_tools() -> Result<()> {
     let tools = [
         "sgdisk",
-        "cryptsetup",
         "mkfs.btrfs",
         "arch-chroot",
         "pacstrap",
@@ -110,7 +109,7 @@ fn confirm_destruction(device: &str) -> Result<()> {
     println!("  WARNING: IRREVOCABLE DATA DESTRUCTION");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("  Target: {}", device);
-    println!("  Action: WIPE + FORMAT (LUKS2 + Btrfs)");
+    println!("  Action: WIPE + FORMAT (Btrfs)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     print!("  To proceed, type the device name '{}': ", device);
     io::stdout().flush()?;
