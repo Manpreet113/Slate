@@ -102,6 +102,7 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
     
     fs::create_dir_all("/mnt/home")?;
     fs::create_dir_all("/mnt/var/cache/pacman/pkg")?;
+    fs::create_dir_all("/mnt/boot")?;
 
     guard.mount(&root_part, "/mnt/home", &["-o", &format!("subvol=@home,{}", mount_opts)])?;
     guard.mount(&root_part, "/mnt/var/cache/pacman/pkg", &["-o", &format!("subvol=@pkg,{}", mount_opts)])?;
