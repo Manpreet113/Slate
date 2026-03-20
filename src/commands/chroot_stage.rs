@@ -19,10 +19,10 @@ pub fn chroot_stage() -> Result<()> {
     // 3. User & Auth & Shell
     configure_user(&user_info)?;
 
-    // 4. Desktop Environment (Hyprland & Greetd)
+    // 4. Desktop Environment (Direct Boot & Hyprland)
     configure_desktop(&user_info)?;
 
-    // 5. Tooling (Ax, VSCode, Git)
+    // 5. Tooling (Ax, VSCode, Clipse, Git)
     configure_tools(&user_info)?;
 
     // 6. Bootloader
@@ -107,6 +107,23 @@ export PATH=$PATH:$HOME/.local/bin
     let user_home = format!("/home/{}", config.username);
     fs::write(format!("{}/.zshrc", user_home), zshrc)?;
     
+    // Auto-login to TTY1
+    fs::create_dir_all("/etc/systemd/system/getty@tty1.service.d")?;
+    let autologin_override = format!(r#"[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --autologin {} --noclear %I $TERM
+"#, config.username);
+    fs::write("/etc/systemd/system/getty@tty1.service.d/override.conf", autologin_override)?;
+
+    // Auto-start Hyprland via .zprofile
+    let zprofile = r#"
+# slate-desktop: auto-start hyprland on tty1
+if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
+  exec start-hyprland
+fi
+"#;
+    fs::write(format!("{}/.zprofile", user_home), zprofile)?;
+    
     // Starship config (minimal)
     fs::create_dir_all(format!("{}/.config", user_home))?;
     fs::write(format!("{}/.config/starship.toml", user_home), "[add_newline]\ninsert_newline = false\n")?;
@@ -117,17 +134,23 @@ export PATH=$PATH:$HOME/.local/bin
 }
 
 fn configure_desktop(config: &UserInfo) -> Result<()> {
-    println!("  > Configuring Hyprland & Greetd...");
+    println!("  > Configuring Hyprland...");
 
     let user_home = format!("/home/{}", config.username);
     let hypr_dir = format!("{}/.config/hypr", user_home);
     fs::create_dir_all(&hypr_dir)?;
 
     let hypr_conf = format!(r#"
-# slate-desktop: minimal hyprland config
+# slate-desktop: direct-boot hyprland config
 monitor=,preferred,auto,auto
 
+# Security: start hyprlock immediately
+exec-once = hyprlock
+
+# Core Services
 exec-once = waybar & dunst
+exec-once = clipse -listen
+
 $terminal = ghostty
 $browser = firefox
 
@@ -170,6 +193,7 @@ bind = SUPER, Q, killactive,
 bind = SUPER, M, exit,
 bind = SUPER, V, togglefloating,
 bind = SUPER, Space, exec, wofi --show drun
+bind = SUPER, C, exec, ghostty -e clipse
 
 # Mouse bindings
 bindm = SUPER, mouse:272, movewindow
@@ -179,23 +203,11 @@ bindm = SUPER, mouse:273, resizewindow
     fs::write(format!("{}/hyprland.conf", hypr_dir), hypr_conf)?;
     run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
 
-    // Greetd / Tuigreet
-    fs::create_dir_all("/etc/greetd")?;
-    let greetd_conf = format!(r#"[terminal]
-vt = 1
-
-[default_session]
-command = "tuigreet --time --cmd hyprland"
-user = "{}"
-"#, config.username);
-    fs::write("/etc/greetd/config.toml", greetd_conf)?;
-    run_command("systemctl", &["enable", "greetd"])?;
-
     Ok(())
 }
 
 fn configure_tools(config: &UserInfo) -> Result<()> {
-    println!("  > Finalizing Tools (Ax & Git)...");
+    println!("  > Finalizing Tools (Ax, Git, VSCode, Clipse)...");
 
     // Git Config
     if !config.git_name.is_empty() {
@@ -209,9 +221,9 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     }
 
     // AUR Packages via Ax
-    println!("  > Installing VS Code (AUR) via Ax...");
+    println!("  > Installing AUR Packages (vscode, clipse) via Ax...");
     let _ = Command::new("sudo")
-        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "--noconfirm"])
+        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "clipse", "--noconfirm"])
         .status();
 
     Ok(())

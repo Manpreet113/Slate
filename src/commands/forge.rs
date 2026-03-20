@@ -125,7 +125,7 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
         "sudo", "networkmanager", "bluez", "bluez-utils", "git", "zsh", "starship",
         "hyprland", "hyprlock", "hypridle", "xdg-desktop-portal-hyprland", "qt6-wayland",
         "pipewire", "wireplumber", "pipewire-pulse", "pipewire-alsa",
-        "greetd", "greetd-tuigreet", "firefox", "ghostty",
+        "firefox", "ghostty",
         "eza", "bat", "zoxide", "fzf", "ripgrep", "curl"
     ];
 
