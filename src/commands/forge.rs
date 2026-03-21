@@ -151,9 +151,10 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
     let _ = run_cmd_captured("rm", &["-rf", "/mnt/usr/share/elysium"], tx);
     
     // We clone the repository directly into the target mount using the explicitly pacstrapped git!
-    run_cmd_captured("arch-chroot", &["/mnt", "git", "clone", "--depth=1", "https://github.com/manpreet113/slate.git", "/tmp/slate_repo"], tx)?;
-    run_cmd_captured("mv", &["/mnt/tmp/slate_repo/shell", "/mnt/usr/share/elysium"], tx)?;
-    run_cmd_captured("rm", &["-rf", "/mnt/tmp/slate_repo"], tx)?;
+    // Using /opt instead of /tmp because arch-chroot mounts a volatile tmpfs over /tmp that gets destroyed on exit
+    run_cmd_captured("arch-chroot", &["/mnt", "git", "clone", "--depth=1", "https://github.com/manpreet113/slate.git", "/opt/slate_repo"], tx)?;
+    run_cmd_captured("mv", &["/mnt/opt/slate_repo/shell", "/mnt/usr/share/elysium"], tx)?;
+    run_cmd_captured("rm", &["-rf", "/mnt/opt/slate_repo"], tx)?;
     
     // Create the Elysium global launcher script
     let launcher_content = r#"#!/usr/bin/env bash
