@@ -42,6 +42,10 @@ Item {
             Modules.WorkspaceTracker {
                 anchors.verticalCenter: parent.verticalCenter
             }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.showLauncher = !root.showLauncher
+            }
         }
         
         // Center: Clock
@@ -49,6 +53,10 @@ Item {
             Layout.preferredHeight: parent.height
             Modules.Clock {
                 anchors.centerIn: parent
+            }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.showCommandCenter = !root.showCommandCenter
             }
         }
         
@@ -59,6 +67,10 @@ Item {
             Modules.SystemStats {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
+            }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.showCommandCenter = !root.showCommandCenter
             }
         }
     }

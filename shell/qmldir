@@ -1,4 +1,5 @@
 module Elysium
 singleton Config 1.0 Config.qml
 Bar 1.0 Bar.qml
-Dock 1.0 Dock.qml
+CommandCenter 1.0 CommandCenter.qml
+Launcher 1.0 Launcher.qml
