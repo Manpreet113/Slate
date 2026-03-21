@@ -3,7 +3,7 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use crate::tui::UserInfo;
 
 pub fn chroot_stage() -> Result<()> {
@@ -222,8 +222,12 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
 
     // AUR Packages via Ax
     println!("  > Installing AUR Packages (vscode, clipse) via Ax...");
-    let _ = Command::new("sudo")
-        .args(["-u", &config.username, "ax", "-S", "visual-studio-code-bin", "clipse", "--noconfirm"])
+    // Using 'su - username -c' to avoid sudo password prompts for local builds
+    let ax_cmd = format!("ax -S visual-studio-code-bin clipse --noconfirm");
+    let _ = Command::new("su")
+        .args(["-", &config.username, "-c", &ax_cmd])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
 
     Ok(())
@@ -254,6 +258,8 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     println!("    $ {} {}", cmd, args.join(" "));
     let status = Command::new(cmd)
         .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .context(format!("Failed to run {}", cmd))?;
 
@@ -266,7 +272,9 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
 fn run_command_stdin(cmd: &str, args: &[&str], input: &str) -> Result<()> {
     let mut child = Command::new(cmd)
         .args(args)
-        .stdin(std::process::Stdio::piped())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
