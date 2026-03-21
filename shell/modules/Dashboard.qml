@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import QtQuick.Effects
 import Quickshell.Services.Mpris
 import "../services" as Services
+import "../components" as Components
 import ".."
 
 Rectangle {
@@ -52,13 +53,13 @@ Rectangle {
             Layout.fillWidth: true
             rowSpacing: 10; columnSpacing: 10
             
-            DashboardToggle { 
+            Components.DashboardToggle { 
                 icon: Services.Network.connected ? "󰖩" : "󰖪"
                 label: Services.Network.connected ? Services.Network.ssid : "WiFi Off"
                 active: Services.Network.connected
                 onClicked: Services.Network.toggle()
             }
-            DashboardToggle { 
+            Components.DashboardToggle { 
                 icon: "󰂯"
                 label: "Bluetooth"
                 active: false // To be implemented with BT service
@@ -70,14 +71,14 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 15
             
-            SliderRow {
+            Components.SliderRow {
                 id: volSlider
                 icon: Services.Audio.muted ? "󰝟" : "󰕾"
                 value: Services.Audio.volume
                 onMoved: (val) => Services.Audio.setVolume(val)
             }
             
-            SliderRow {
+            Components.SliderRow {
                 id: brightSlider
                 icon: "󰃟"
                 value: Services.Brightness.value
@@ -141,58 +142,6 @@ Rectangle {
                 anchors.centerIn: parent
                 visible: mediaBox.player === null
                 Text { text: "󰎆 No Media Playing"; color: Config.textSecondary; font.pixelSize: 16 }
-            }
-        }
-    }
-}
-
-// Internal reusable components (could move to components/ later)
-component DashboardToggle : Rectangle {
-    property string icon: ""
-    property string label: ""
-    property bool active: false
-    signal clicked()
-    
-    Layout.fillWidth: true
-    height: 60
-    radius: Config.radiusMedium
-    color: active ? Config.accent : "white"
-    opacity: active ? 0.8 : 0.05
-    
-    RowLayout {
-        anchors.fill: parent
-        anchors.leftMargin: 15; spacing: 10
-        Text { text: icon; color: "white"; font.pixelSize: 20 }
-        Text { text: label; color: "white"; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-    }
-    
-    MouseArea { anchors.fill: parent; onClicked: parent.clicked() }
-}
-
-component SliderRow : RowLayout {
-    property string icon: ""
-    property int value: 0
-    signal moved(int val)
-    
-    spacing: 15
-    Text { text: icon; color: Config.textPrimary; font.pixelSize: 20; Layout.preferredWidth: 30 }
-    
-    Rectangle {
-        Layout.fillWidth: true
-        height: 6; radius: 3
-        color: "white"; opacity: 0.1
-        
-        Rectangle {
-            width: parent.width * (value / 100)
-            height: parent.height; radius: 3
-            color: Config.accent
-        }
-        
-        MouseArea {
-            anchors.fill: parent
-            onClicked: (mouse) => moved(Math.round((mouse.x / width) * 100))
-            onPositionChanged: (mouse) => {
-                if (pressed) moved(Math.round((mouse.x / width) * 100))
             }
         }
     }
