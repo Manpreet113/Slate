@@ -147,11 +147,11 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
     
     // Fetch and install the Elysium shell directory
     tx.send(InstallMsg::Log("Installing Elysium Shell components from remote...".to_string()))?;
-    fs::create_dir_all("/mnt/usr/share")?;
+    fs::create_dir_all("/mnt/usr/share/elysium")?;
     
-    // We clone the repository directly into the target mount
-    run_cmd_captured("git", &["clone", "--depth=1", "https://github.com/manpreet113/slate.git", "/mnt/tmp/slate_repo"], tx)?;
-    run_cmd_captured("cp", &["-r", "/mnt/tmp/slate_repo/shell", "/mnt/usr/share/elysium"], tx)?;
+    // We clone the repository directly into the target mount using the explicitly pacstrapped git!
+    run_cmd_captured("arch-chroot", &["/mnt", "git", "clone", "--depth=1", "https://github.com/manpreet113/slate.git", "/tmp/slate_repo"], tx)?;
+    run_cmd_captured("cp", &["-r", "/mnt/tmp/slate_repo/shell/.", "/mnt/usr/share/elysium/"], tx)?;
     run_cmd_captured("rm", &["-rf", "/mnt/tmp/slate_repo"], tx)?;
     
     // Create the Elysium global launcher script
