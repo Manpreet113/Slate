@@ -11,46 +11,60 @@ Item {
     // Search State
     property string searchText: ""
     
-    // Background Overlay
+    // Background Overlay with High Blur
     Rectangle {
         id: bg
         anchors.fill: parent
         color: "black"
-        opacity: 0.4
-    }
-    
-    MultiEffect {
-        source: bg
-        anchors.fill: bg
-        blurEnabled: true
-        blur: Config.blurRadius * 3
+        opacity: 0.5
+        
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: Config.blurRadius * 3
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.showLauncher = false
+        }
     }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 100
-        spacing: 50
+        spacing: 60
         
-        // Search Bar
+        // Search Bar (Molecular Glass)
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
-            width: 600
-            height: 60
-            color: "#1A1A1A"
-            radius: 30
+            width: 650
+            height: 64
+            color: Qt.rgba(255, 255, 255, 0.05)
+            radius: 32
             border.color: Config.borderColor
             border.width: 1
             
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                shadowEnabled: true
+                shadowOpacity: 0.2
+                shadowBlur: 0.5
+                shadowColor: "black"
+            }
+            
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 20
-                anchors.rightMargin: 20
-                Text { text: "󰍉"; color: "white"; opacity: 0.6; font.pixelSize: 24 }
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                spacing: 15
+                Text { text: "󰍉"; color: Config.accent; font.pixelSize: 24 }
                 TextInput {
                     id: searchInput
                     Layout.fillWidth: true
                     color: "white"
-                    font.pixelSize: 20
+                    font.family: Config.mainFont
+                    font.pixelSize: 22
                     focus: true
                     onTextChanged: launcher.searchText = text
                 }
@@ -85,21 +99,25 @@ Item {
                 
                 ColumnLayout {
                     anchors.centerIn: parent
-                    spacing: 15
+                    spacing: 16
                     
                     Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                         width: 100
                         height: 100
-                        radius: 20
-                        color: modelData.color
+                        radius: 24
+                        color: Qt.rgba(255, 255, 255, 0.05)
+                        border.color: Config.borderColor
+                        border.width: 1
                         
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData.icon
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 40
+                        Rectangle {
+                            anchors.fill: parent; anchors.margins: 10
+                            radius: 18; color: modelData.color
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.icon
+                                color: "white"; font.bold: true; font.pixelSize: 36
+                            }
                         }
                         
                         MouseArea {
@@ -118,9 +136,10 @@ Item {
                     Text {
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.name
-                        color: "white"
+                        color: Config.textPrimary
+                        font.family: Config.mainFont
                         font.bold: true
-                        font.pixelSize: 16
+                        font.pixelSize: 15
                     }
                 }
             }

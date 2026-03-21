@@ -11,7 +11,7 @@ Item {
     implicitHeight: Config.barHeight
     implicitWidth: 800 
     
-    // Background with Blur
+    // Background with Molecular Glass
     Rectangle {
         id: bg
         anchors.fill: parent
@@ -20,13 +20,16 @@ Item {
         radius: Config.radius
         border.color: Config.borderColor
         border.width: 1
-    }
-    
-    MultiEffect {
-        source: bg
-        anchors.fill: bg
-        blurEnabled: true
-        blur: Config.blurRadius
+        
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: Config.blurRadius
+            shadowEnabled: true
+            shadowOpacity: Config.shadowOpacity
+            shadowBlur: Config.shadowBlur
+            shadowColor: "black"
+        }
     }
 
     RowLayout {

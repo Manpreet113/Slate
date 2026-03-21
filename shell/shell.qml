@@ -1,3 +1,4 @@
+//@ pragma Env QSG_RENDER_LOOP=threaded
 import QtQuick
 import Quickshell
 import Quickshell.Wayland
@@ -37,21 +38,34 @@ ShellRoot {
         
         anchors {
             top: true
+            bottom: true
+            left: true
             right: true
         }
         
-        WlrLayershell.margins.top: Config.barHeight + Config.margin * 2
-        WlrLayershell.margins.right: Config.margin
-        
-        implicitWidth: 350
-        implicitHeight: 500
         color: "transparent"
-        
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.namespace: "slate-command-center"
         
-        CommandCenter {
+        // Full screen click-to-close area
+        MouseArea {
             anchors.fill: parent
+            onClicked: root.showCommandCenter = false
+        }
+        
+        CommandCenter {
+            width: 350
+            height: 500
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: Config.barHeight + Config.margin * 2
+            anchors.rightMargin: Config.margin
+            
+            // Re-intercept clicks so they don't close the window
+            MouseArea {
+                anchors.fill: parent
+                onClicked: {} 
+            }
         }
     }
 }

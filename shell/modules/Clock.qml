@@ -19,8 +19,8 @@ Item {
     Text {
         text: Qt.formatDateTime(currentTime, "HH:mm")
         color: Config.accent
-        font.family: Config.sansFont
-        font.pointSize: Config.fontSize + 2
+        font.family: Config.mainFont
+        font.pointSize: 14
         font.bold: true
     }
 }

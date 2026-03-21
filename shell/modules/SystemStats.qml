@@ -54,25 +54,23 @@ RowLayout {
     // Layout
     Text {
         text: "CPU " + cpuUsage
-        color: Config.fg
-        opacity: 0.7
+        color: Config.textSecondary
         font.family: Config.monoFont
-        font.pointSize: Config.fontSize - 1
+        font.pixelSize: 11
     }
     
     Text {
         text: "RAM " + ramUsage
-        color: Config.fg
-        opacity: 0.7
+        color: Config.textSecondary
         font.family: Config.monoFont
-        font.pointSize: Config.fontSize - 1
+        font.pixelSize: 11
     }
     
     Text {
         text: "BAT " + batteryText
         color: Config.accent
         font.family: Config.monoFont
-        font.pointSize: Config.fontSize - 1
+        font.pixelSize: 12
         font.bold: true
     }
 }
