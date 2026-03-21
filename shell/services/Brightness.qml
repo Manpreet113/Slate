@@ -2,7 +2,7 @@ pragma Singleton
 import QtQuick
 import Quickshell.Io
 
-QtObject {
+Item {
     id: brightness
     
     property int value: 70

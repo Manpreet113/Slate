@@ -95,7 +95,7 @@ Rectangle {
             radius: Config.radiusMedium
             border.color: Config.borderColor
             
-            property var player: Mpris.players.length > 0 ? Mpris.players[0] : null
+            property var player: Mpris.players.count > 0 ? Mpris.players.get(0) : null
             
             ColumnLayout {
                 anchors.fill: parent

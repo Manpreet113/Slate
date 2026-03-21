@@ -2,13 +2,13 @@ pragma Singleton
 import QtQuick
 import Quickshell.Services.Notifications
 
-QtObject {
+Item {
     id: notifications
     
     property var lastNotification: null
     property bool hasNotification: false
     
-    property NotificationServer server: NotificationServer {
+    NotificationServer {
         onNotification: (n) => {
             lastNotification = n;
             hasNotification = true;

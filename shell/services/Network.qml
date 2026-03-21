@@ -2,7 +2,7 @@ pragma Singleton
 import QtQuick
 import Quickshell.Io
 
-QtObject {
+Item {
     id: network
     
     property string ssid: "Disconnected"
