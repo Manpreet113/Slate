@@ -30,25 +30,31 @@ ShellRoot {
     PanelWindow {
         id: bottomDock
         
-        anchors { bottom: true; left: true; right: true }
-        implicitHeight: Config.dockHeight + Config.margin
+        anchors {
+            bottom: true
+            left: true
+            right: true
+        }
         
-        // Autohide: No exclusive zone so it overlays windows
+        property bool revealed: false
+        
+        // Dynamic Height: Trigger area (5px) vs Full Area
+        implicitHeight: revealed ? (Config.dockHeight + Config.margin) : 5
+        
+        // No exclusive zone so it doesn't push windows
         exclusiveZone: -1 
         color: "transparent"
         
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.namespace: "slate-dock"
         
-        property bool autohide: true
-        property bool revealed: false
-        
-        // Hit area for autohide
+        // This MouseArea now only exists when implicitHeight > 5 if we want, 
+        // but keeping it simple: it's the trigger.
         MouseArea {
-            id: hitArea
             anchors.fill: parent
             hoverEnabled: true
             onEntered: bottomDock.revealed = true
+            onExited: bottomDock.revealed = false
         }
 
         Dock {
@@ -56,20 +62,17 @@ ShellRoot {
             width: 600
             anchors.horizontalCenter: parent.horizontalCenter
             
-            // Animation logic
+            // Slide animation
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: (bottomDock.revealed || !bottomDock.autohide) ? Config.margin : -Config.dockHeight
+            anchors.bottomMargin: bottomDock.revealed ? Config.margin : -Config.dockHeight
+            
+            opacity: bottomDock.revealed ? 1.0 : 0.0
             
             Behavior on anchors.bottomMargin {
-                NumberAnimation { duration: 300; easing.type: Easing.OutQuart }
+                NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
             }
-            
-            // Hide after mouse leaves the dock itself
-            MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                propagateComposedEvents: true
-                onExited: bottomDock.revealed = false
+            Behavior on opacity {
+                NumberAnimation { duration: 200 }
             }
         }
     }
