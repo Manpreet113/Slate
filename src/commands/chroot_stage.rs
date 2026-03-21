@@ -151,7 +151,7 @@ exec-once = hyprlock
 exec-once = elysium
 exec-once = clipse -listen
 
-$terminal = ghostty
+$terminal = kitty
 $browser = firefox
 
 input {{
@@ -193,7 +193,7 @@ bind = SUPER, Q, killactive,
 bind = SUPER, M, exit,
 bind = SUPER, V, togglefloating,
 bind = SUPER, Space, exec, wofi --show drun
-bind = SUPER, C, exec, ghostty -e clipse
+bind = SUPER, C, exec, kitty -e clipse
 
 # Mouse bindings
 bindm = SUPER, mouse:272, movewindow

@@ -125,9 +125,12 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
         "sudo", "networkmanager", "bluez", "bluez-utils", "git", "zsh", "starship",
         "hyprland", "hyprlock", "hypridle", "xdg-desktop-portal-hyprland", "qt6-wayland",
         "pipewire", "wireplumber", "pipewire-pulse", "pipewire-alsa",
-        "firefox", "ghostty",
+        "firefox", "kitty",
         "eza", "bat", "zoxide", "fzf", "ripgrep", "curl"
     ];
+
+    tx.send(InstallMsg::Log("Updating Arch Linux Keyring...".to_string()))?;
+    let _ = run_cmd_captured("pacman", &["-Sy", "archlinux-keyring", "--noconfirm"], tx);
 
     tx.send(InstallMsg::Log("Starting Pacstrap (Desktop Experience)...".to_string()))?;
     let mut args = vec!["-K", "/mnt"];
