@@ -2,7 +2,7 @@ pragma Singleton
 import QtQuick
 import Quickshell.Services
 
-Singleton {
+QtObject {
     id: notifications
     
     property var lastNotification: null

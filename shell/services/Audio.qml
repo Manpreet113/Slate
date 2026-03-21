@@ -2,7 +2,7 @@ pragma Singleton
 import QtQuick
 import Quickshell.Io
 
-Singleton {
+QtObject {
     id: audio
     
     property int volume: 50
