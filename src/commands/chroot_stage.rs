@@ -148,7 +148,7 @@ monitor=,preferred,auto,auto
 exec-once = hyprlock
 
 # Core Services
-exec-once = waybar & dunst
+exec-once = elysium
 exec-once = clipse -listen
 
 $terminal = ghostty
@@ -221,9 +221,12 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     }
 
     // AUR Packages via Ax
-    println!("  > Installing AUR Packages (vscode, clipse) via Ax...");
+    println!("  > Installing AUR Packages via Ax (vscode, clipse, elysium dependencies)...");
+    
+    let elysium_deps = "quickshell-git matugen-bin gpu-screen-recorder wl-clip-persist mpvpaper gradia ttf-phosphor-icons ttf-league-gothic adw-gtk-theme network-manager-applet blueman pavucontrol easyeffects grim slurp imagemagick jq sqlite upower wl-clipboard wlsunset wtype zbar glib2 zenity power-profiles-daemon ttf-roboto ttf-roboto-mono ttf-dejavu ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-nerd-fonts-symbols";
+    
     // Using 'su - username -c' to avoid sudo password prompts for local builds
-    let ax_cmd = format!("ax -S visual-studio-code-bin clipse --noconfirm");
+    let ax_cmd = format!("ax -S visual-studio-code-bin clipse {} --noconfirm", elysium_deps);
     let _ = Command::new("su")
         .args(["-", &config.username, "-c", &ax_cmd])
         .stdout(Stdio::null())
