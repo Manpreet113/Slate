@@ -2,6 +2,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Wayland
+import "modules" as Modules
 import "."
 
 ShellRoot {
@@ -10,6 +11,7 @@ ShellRoot {
     // UI State
     property bool showCommandCenter: false
     property bool showLauncher: false
+    property bool showDashboard: false
     
     // Global settings
     settings.watchFiles: true
@@ -31,10 +33,47 @@ ShellRoot {
         }
     }
     
-    // The Command Center Overlay
+    // The Notch
     PanelWindow {
-        id: commandCenterWindow
-        visible: root.showCommandCenter
+        id: notchWindow
+        anchors {
+            top: true
+            horizontalCenter: true
+        }
+        WlrLayershell.margins.top: 4
+        
+        color: "transparent"
+        WlrLayershell.layer: WlrLayer.Top
+        WlrLayershell.namespace: "slate-notch"
+        
+        Modules.Notch {
+            anchors.fill: parent
+        }
+    }
+
+    // Notification Popups
+    PanelWindow {
+        id: notificationWindow
+        anchors {
+            top: true
+            right: true
+        }
+        WlrLayershell.margins.top: Config.barHeight + Config.margin * 2
+        WlrLayershell.margins.right: Config.margin
+        
+        color: "transparent"
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.namespace: "slate-notifications"
+        
+        Modules.NotificationPopup {
+            anchors.fill: parent
+        }
+    }
+
+    // The Dashboard Overlay
+    PanelWindow {
+        id: dashboardWindow
+        visible: root.showDashboard
         
         anchors {
             top: true
@@ -45,26 +84,21 @@ ShellRoot {
         
         color: "transparent"
         WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.namespace: "slate-command-center"
+        WlrLayershell.namespace: "slate-dashboard"
         
-        // Full screen click-to-close area
         MouseArea {
             anchors.fill: parent
-            onClicked: root.showCommandCenter = false
+            onClicked: root.showDashboard = false
         }
         
-        CommandCenter {
-            width: 350
-            height: 500
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.topMargin: Config.barHeight + Config.margin * 2
-            anchors.rightMargin: Config.margin
+        Modules.Dashboard {
+            width: 400
+            height: 600
+            anchors.centerIn: parent
             
-            // Re-intercept clicks so they don't close the window
             MouseArea {
                 anchors.fill: parent
-                onClicked: {} 
+                onClicked: {}
             }
         }
     }

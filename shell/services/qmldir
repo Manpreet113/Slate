@@ -1,0 +1,5 @@
+module services
+singleton Audio 1.0 Audio.qml
+singleton Brightness 1.0 Brightness.qml
+singleton Network 1.0 Network.qml
+singleton Notifications 1.0 Notifications.qml
