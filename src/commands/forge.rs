@@ -138,12 +138,28 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
     let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
     fs::write("/mnt/etc/fstab", output.stdout)?;
 
-    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax)...".to_string()))?;
+    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax) and Elysium Shell...".to_string()))?;
     let current_exe = std::env::current_exe()?;
     fs::copy(&current_exe, "/mnt/usr/local/bin/slate")?;
     
+    // Copy the Elysium shell directory
+    tx.send(InstallMsg::Log("Installing Elysium Shell components...".to_string()))?;
+    let current_dir = std::env::current_dir()?;
+    let shell_src = current_dir.join("shell");
+    fs::create_dir_all("/mnt/usr/share/elysium")?;
+    run_cmd_captured("cp", &["-r", &format!("{}/.", shell_src.display()), "/mnt/usr/share/elysium/"], tx)?;
+    
+    // Create the Elysium global launcher script
+    let launcher_content = r#"#!/usr/bin/env bash
+export PATH="$HOME/.local/bin:$PATH"
+export QML2_IMPORT_PATH="/usr/share/elysium/modules:$QML2_IMPORT_PATH"
+export QML_IMPORT_PATH="$QML2_IMPORT_PATH"
+exec quickshell -p /usr/share/elysium "$@"
+"#;
+    fs::write("/mnt/usr/local/bin/elysium", launcher_content)?;
+
     run_cmd_captured("curl", &["-L", "https://github.com/manpreet113/ax/releases/latest/download/ax", "-o", "/mnt/usr/local/bin/ax"], tx)?;
-    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate"], tx)?;
+    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate", "/mnt/usr/local/bin/elysium"], tx)?;
 
     Ok(())
 }
