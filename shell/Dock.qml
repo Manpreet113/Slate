@@ -2,12 +2,15 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import Quickshell
+import Quickshell.Hyprland
 import "."
 
 Item {
     id: dock
     implicitHeight: Config.dockHeight
-    implicitWidth: childrenRect.width + Config.padding * 4
+    implicitWidth: layout.width + Config.padding * 4
+    
+    property bool shown: true // We'll link this to autohide logic in shell.qml
     
     // Background with Blur
     Rectangle {
@@ -18,14 +21,6 @@ Item {
         radius: Config.radius
         border.color: Config.borderColor
         border.width: 1
-        
-        // Subtle outer glow
-        layer.enabled: true
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 8
-            opacity: 0.3
-        }
     }
     
     MultiEffect {
@@ -36,33 +31,49 @@ Item {
     }
 
     RowLayout {
+        id: layout
         anchors.centerIn: parent
         spacing: Config.padding * 1.5
         anchors.margins: Config.padding
         
+        // Dynamic Taskbar: Group windows by class
         Repeater {
-            model: [
-                { name: "F", color: "#FF4500", label: "Firefox" },
-                { name: "G", color: "#333333", label: "Ghostty" },
-                { name: "C", color: "#007ACC", label: "Code" },
-                { name: "F", color: "#4CAF50", label: "Files" },
-                { name: "S", color: "#1DB954", label: "Spotify" }
-            ]
+            model: Hyprland.windows
+            
             delegate: Item {
-                width: 44
+                // Only show if it's the first window of this class in the list (simple grouping)
+                // Note: This is an O(N^2) check in QML, but for ~10 windows it's fine.
+                visible: {
+                    for (var i = 0; i < index; i++) {
+                        if (Hyprland.windows.get(i).class === modelData.class) return false;
+                    }
+                    return true;
+                }
+                
+                width: visible ? 44 : 0
                 height: 44
+                clip: true
                 
                 Rectangle {
                     anchors.fill: parent
                     radius: 12
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: modelData.color }
-                        GradientStop { position: 1.0; color: Qt.darker(modelData.color, 1.2) }
+                    color: modelData.focus ? Config.accent : "#333333"
+                    
+                    // Animated underline for running apps
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 2
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 12
+                        height: 2
+                        radius: 1
+                        color: "white"
+                        visible: true
                     }
                     
                     Text {
                         anchors.centerIn: parent
-                        text: modelData.name
+                        text: modelData.class.substring(0, 1).toUpperCase()
                         color: "white"
                         font.bold: true
                         font.pixelSize: 18
@@ -74,9 +85,11 @@ Item {
                     hoverEnabled: true
                     onEntered: parent.scale = 1.2
                     onExited: parent.scale = 1.0
+                    onClicked: Hyprland.dispatch("focuswindow address:" + modelData.address)
                 }
                 
                 Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
+                Behavior on width { NumberAnimation { duration: 200 } }
             }
         }
     }
