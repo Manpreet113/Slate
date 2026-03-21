@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
-import Quickshell.Services
+import Quickshell.Services.Mpris
 import "../services" as Services
 import ".."
 

@@ -1,6 +1,6 @@
 pragma Singleton
 import QtQuick
-import Quickshell.Services
+import Quickshell.Services.Notifications
 
 QtObject {
     id: notifications
@@ -8,10 +8,9 @@ QtObject {
     property var lastNotification: null
     property bool hasNotification: false
     
-    Connections {
-        target: Quickshell.Notifications
-        function onNotificationAdded(notification) {
-            lastNotification = notification;
+    property NotificationServer server: NotificationServer {
+        onNotification: (n) => {
+            lastNotification = n;
             hasNotification = true;
             hideTimer.restart();
         }
