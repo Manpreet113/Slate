@@ -25,6 +25,4 @@ ShellRoot {
             anchors.bottomMargin: 0
         }
     }
-    
-    }
 }
