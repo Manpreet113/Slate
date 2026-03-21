@@ -38,7 +38,8 @@ ShellRoot {
         id: notchWindow
         anchors {
             top: true
-            horizontalCenter: true
+            left: true
+            right: true
         }
         WlrLayershell.margins.top: 4
         
@@ -47,7 +48,8 @@ ShellRoot {
         WlrLayershell.namespace: "slate-notch"
         
         Modules.Notch {
-            anchors.fill: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            height: parent.height
         }
     }
 
