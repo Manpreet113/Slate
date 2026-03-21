@@ -14,6 +14,7 @@ Slate is a premium, full-screen TUI (Terminal User Interface) Arch Linux install
 - **Real-time Installation Feedback**: Live command output streaming and progress tracking directly in the TUI.
 - **Bootloader Setup**: Automated `systemd-boot` installation with UUID-based persistent mounting.
 - **Built-in `ax` Integration**: Automatically installs the latest version of the `ax` power tool.
+- **Native Elysium Shell**: Seamlessly installs and configures the Molecular Glass Elysium Wayland Shell out-of-the-box.
 
 ## Prerequisites
 
