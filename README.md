@@ -1,96 +1,57 @@
-# Slate
+# SLATE 🪐
 
-**Slate** is a modern, opinionated Arch Linux installer and configuration manager.
+Slate is a premium, full-screen TUI (Terminal User Interface) Arch Linux installer built with **Ratatui**. It streamlines the process of setting up a clean, optimized Arch Linux system with **Btrfs** and **systemd-boot**.
 
-It transforms a raw machine into a fully configured Arch Linux workstation with Hyprland, complete with a custom design system, secret management, and immutable-style config generation.
+![TUI Demo](https://img.shields.io/badge/TUI-Premium-blueviolet)
+![Rust](https://img.shields.io/badge/Language-Rust-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Features
 
-- **Forge Installer**: A single binary that partitions, encrypts (LUKS2), formats (Btrfs), and bootstraps Arch Linux.
-- **Config Management**: Generates config files for Hyprland, Waybar, Alacritty, and more from a central `slate.toml`.
-- **Theme Engine**: Integrated `matugen` support to generate color palettes from wallpapers.
-- **Secret Management**: Encrypts sensitive keys using `age` (via `rtoolbox`).
-- **Declarative**: Define your system state in one file.
+- **Premium TUI Experience**: Interactive disk selection and multi-step configuration forms.
+- **Automatic Partitioning**: 1GB EFI + remaining Btrfs partition with zero manual typing.
+- **Optimized Btrfs Layout**: Automated subvolume creation (`@`, `@home`, `@pkg`) for easy snapshots.
+- **Real-time Installation Feedback**: Live command output streaming and progress tracking directly in the TUI.
+- **Bootloader Setup**: Automated `systemd-boot` installation with UUID-based persistent mounting.
+- **Built-in `ax` Integration**: Automatically installs the latest version of the `ax` power tool.
 
-## Installation
+## Prerequisites
 
-Boot into the Arch Linux Live ISO, connect to the internet, and run:
+- **Arch Linux ISO** (or any environment with `arch-chroot`, `pacstrap`, `sgdisk`, and `mkfs.btrfs`).
+- **Network Connectivity** (required for `pacstrap`).
+- **UEFI Mode** (Slate requires UEFI for `systemd-boot`).
 
-```bash
-# 1. Download Slate
-curl -L https://github.com/manpreet113/slate/releases/latest/download/slate -o slate
-chmod +x slate
+## Quick Start
 
-# 2. Run the Forge
-# REPLACE /dev/nvme0n1 with your target disk!
-./slate forge /dev/nvme0n1
-```
+1. Boot into the Arch Linux Live ISO.
+2. Download the Slate binary:
+   ```bash
+   curl -L https://github.com/manpreet113/slate/releases/download/tui-installer-latest/slate -o slate
+   chmod +x slate
+   ```
+3. Run the installer:
+   ```bash
+   ./slate install
+   ```
+4. Follow the TUI prompts to select your disk and set up your user.
+5. Once complete, reboot into your new system!
 
-**What `slate forge` does:**
-1.  **Preflight**: Checks for UEFI, internet, and root privileges.
-2.  **Cleansing**: Wipes the disk and creates partitions (EFI + LUKS Root).
-3.  **Vault**: Encrypts the root partition with LUKS2.
-4.  **Subvolumes**: Creates Btrfs subvolumes (`@`, `@home`, `@pkg`).
-5.  **Injection**: Bootstraps the base system and installs `slate` and `ax`.
-6.  **Chroot Stage**: Automatically enters the new system to:
-    - Set timezone/locale.
-    - Create your user.
-    - Set up systemd-boot with UKI.
-    - Install packages via `ax`.
-    - Deploy configs.
+## Installation Stages
 
-## Usage
-
-### Post-Install
-
-After rebooting into your new system:
-
-```bash
-# Initialize user configuration (if not done automatically)
-slate init
-
-# Reload configurations after editing slate.toml
-slate reload
-```
-
-### Wallpaper & Theming
-
-Set a new wallpaper and automatically generate a color scheme:
-
-```bash
-slate wall ~/Pictures/Wallpapers/mountain.jpg
-```
-
-This will:
-- Copy the wallpaper to `~/Pictures/Wallpapers/`.
-- Generate a Material You palette using `matugen`.
-- Update `slate.toml`.
-- Reload all applications (Hyprland, Waybar, etc.) with the new colors.
-
-## Configuration
-
-Your system is defined in `~/.config/slate/slate.toml`.
-
-```toml
-[hardware]
-host = "arch-desktop"
-font_family = "JetBrains Mono"
-
-[palette]
-mode = "matugen"
-accent = "#ff0000" # Fallback if matugen fails
-```
-
-Templates are stored in `~/.config/slate/templates/` and use the Tera templating engine.
+- **Preflight**: Automated system verification (Root, UEFI, Network).
+- **Cleansing**: Wipes the target disk and creates the partition table.
+- **Dance**: Sets up Btrfs subvolumes and mounts the hierarchy.
+- **Injection**: Pacstraps the base system and installs essential firmware + `ax`.
+- **Chroot Stage**: Finalizes the system with hostname, locale, and user setup.
 
 ## Development
 
-```bash
-# Build locally
-cargo build --release
+Slate is written in Rust. To build from source:
 
-# Run checks
-cargo fmt --check
-cargo check
-cargo clippy
+```bash
+cargo build --release
 ```
+
+## License
+
+Slate is released under the MIT License.

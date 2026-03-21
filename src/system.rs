@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Find the root device using /proc/mounts (no findmnt)
 pub fn get_root_device() -> Result<String> {
@@ -19,93 +19,6 @@ pub fn get_root_device() -> Result<String> {
     }
 
     bail!("Could not identify root filesystem in /proc/mounts")
-}
-
-/// Trace a device name (e.g. /dev/dm-0 or /dev/mapper/root) to its underlying physical partition
-/// utilizing sysfs hierarchy (/sys/class/block)
-pub fn trace_to_physical_partition(device_path: &str) -> Result<String> {
-    // Resolve symlinks (e.g. /dev/mapper/root -> /dev/dm-0)
-    let p = Path::new(device_path);
-    let real_path = if p.exists() {
-        fs::canonicalize(p).context(format!("Failed to resolve path {}", device_path))?
-    } else {
-        // Fallback if we can't find it (maybe checking /proc/mounts gave a weird path)
-        PathBuf::from(device_path)
-    };
-
-    // Get the final component (e.g. dm-0)
-    let device_name = real_path
-        .file_name()
-        .context("Invalid device path")?
-        .to_string_lossy();
-
-    let sys_path = Path::new("/sys/class/block").join(device_name.as_ref());
-
-    if !sys_path.exists() {
-        // Try looking for it directly if canonicalization failed or behaved unexpectedly
-        // Some systems might not have /dev/dm-0 mapped to /sys/class/block/dm-0 ?
-        // Actually they reliably do.
-        bail!(
-            "Device {} (resolved: {}) not found in sysfs at {}",
-            device_path,
-            real_path.display(),
-            sys_path.display()
-        );
-    }
-
-    // Check if it's a DM device (LVM/LUKS)
-    // DM devices have a 'slaves' directory containing the underlying device(s)
-    let slaves_dir = sys_path.join("slaves");
-
-    if slaves_dir.exists() {
-        // Read directory, pick the first entry
-        // LUKS normally has 1 slave
-        let mut entries = fs::read_dir(&slaves_dir)?;
-        if let Some(entry) = entries.next() {
-            let entry = entry?;
-            let slave_name = entry.file_name();
-            let slave_name_str = slave_name.to_string_lossy();
-
-            // Recursively trace just in case (e.g. LVM on LUKS on Part)
-            return trace_to_physical_partition(&format!("/dev/{}", slave_name_str));
-        }
-    }
-
-    // If no slaves, this is the physical partition
-    // Return the full path to it
-    Ok(format!("/dev/{}", device_name))
-}
-
-/// Extract PARTUUID by scanning /dev/disk/by-partuuid/ (no blkid)
-pub fn get_partuuid(device_path: &str) -> Result<String> {
-    let partuuid_dir = Path::new("/dev/disk/by-partuuid");
-
-    if !partuuid_dir.exists() {
-        bail!("/dev/disk/by-partuuid/ does not exist - needed to resolve PARTUUID");
-    }
-
-    // Handle relative device paths or symlinks
-    let target_canon = fs::canonicalize(device_path)
-        .context(format!("Could not resolve device path {}", device_path))?;
-
-    for entry in fs::read_dir(partuuid_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Resolve the link
-        if let Ok(link_target) = fs::read_link(&path) {
-            // read_link returns relative path usually. We need to resolve it relative to the directory.
-            let full_link_path = partuuid_dir.join(link_target);
-            if let Ok(canon_link) = fs::canonicalize(full_link_path) {
-                if canon_link == target_canon {
-                    // Match found! The filename is the PARTUUID
-                    return Ok(entry.file_name().to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-
-    bail!("Could not find PARTUUID for device {}", device_path)
 }
 
 /// Extract filesystem/LUKS UUID by scanning /dev/disk/by-uuid/
@@ -136,4 +49,121 @@ pub fn get_uuid(device_path: &str) -> Result<String> {
     }
 
     bail!("Could not find UUID for device {}", device_path)
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockDevice {
+    pub path: String,
+    pub size: String,
+    pub model: String,
+}
+
+/// List all available physical block devices (disks, not partitions)
+pub fn list_block_devices() -> Result<Vec<BlockDevice>> {
+    let mut devices = Vec::new();
+    let block_dir = Path::new("/sys/class/block");
+
+    if !block_dir.exists() {
+        bail!("Could not access /sys/class/block");
+    }
+
+    for entry in fs::read_dir(block_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+
+        // Skip partitions (e.g. sda1, nvme0n1p1) and loop devices
+        if name.starts_with("loop") || name.contains('p') || (name.starts_with("sd") && name.len() > 3) {
+            continue;
+        }
+
+        let device_path = block_dir.join(&name);
+        if device_path.join("partition").exists() {
+            continue;
+        }
+
+        // Get size
+        let size_str = fs::read_to_string(device_path.join("size")).unwrap_or_default();
+        let size_bytes = size_str.trim().parse::<u64>().unwrap_or(0) * 512;
+        let size_gb = size_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+
+        // Get model
+        let model = fs::read_to_string(device_path.join("device/model"))
+            .unwrap_or_else(|_| "Unknown".to_string())
+            .trim()
+            .to_string();
+
+        devices.push(BlockDevice {
+            path: format!("/dev/{}", name),
+            size: format!("{:.1} GB", size_gb),
+            model,
+        });
+    }
+
+    Ok(devices)
+}
+
+/// List all available keymaps in /usr/share/kbd/keymaps/
+pub fn list_keymaps() -> Result<Vec<String>> {
+    let mut keymaps = Vec::new();
+    let base_path = Path::new("/usr/share/kbd/keymaps");
+    if !base_path.exists() {
+        return Ok(vec!["us".to_string()]); // Fallback
+    }
+
+    fn collect_maps(dir: &Path, keymaps: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                collect_maps(&path, keymaps)?;
+            } else if let Some(name) = path.file_name() {
+                let s = name.to_string_lossy();
+                if s.ends_with(".map.gz") || s.ends_with(".map") {
+                    let map_name = s.trim_end_matches(".map.gz").trim_end_matches(".map");
+                    keymaps.push(map_name.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    collect_maps(base_path, &mut keymaps)?;
+    keymaps.sort();
+    keymaps.dedup();
+    Ok(keymaps)
+}
+
+/// List all available timezones in /usr/share/zoneinfo/
+pub fn list_timezones() -> Result<Vec<String>> {
+    let mut zones = Vec::new();
+    let base_path = Path::new("/usr/share/zoneinfo");
+    if !base_path.exists() {
+        return Ok(vec!["UTC".to_string()]); // Fallback
+    }
+
+    fn collect_zones(dir: &Path, base: &Path, zones: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+            // Skip non-timezone files/folders
+            if name.starts_with('.') || name == "posix" || name == "right" || name == "Etc" || name.ends_with(".tab") {
+                continue;
+            }
+
+            if path.is_dir() {
+                let _ = collect_zones(&path, base, zones);
+            } else {
+                if let Ok(relative) = path.strip_prefix(base) {
+                    zones.push(relative.to_string_lossy().to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let _ = collect_zones(base_path, base_path, &mut zones);
+    zones.sort();
+    Ok(zones)
 }
