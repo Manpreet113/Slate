@@ -7,18 +7,16 @@ import ".."
 
 RowLayout {
     id: systemStats
-    spacing: Config.padding
+    spacing: Config.padding * 1.5
     
     property string cpuUsage: "0%"
     property string ramUsage: "0G"
     
-    UPower { id: upower }
+    readonly property string batteryText: UPower.displayDevice.percentage >= 0 
+        ? Math.round(UPower.displayDevice.percentage) + "%" 
+        : "--%"
     
-    readonly property string batteryText: upower.displayDevice.percentage >= 0 
-        ? Math.round(upower.displayDevice.percentage) + "%" 
-        : "N/A"
-    
-    // CPU Fetcher: Using sh -c to run a pipeline
+    // CPU Fetcher
     Process {
         id: cpuProc
         command: ["sh", "-c", "top -bn1 | grep 'Cpu(s)' | awk '{print $2 + $4}'"]
@@ -26,9 +24,7 @@ RowLayout {
         stdout: SplitParser {
             onRead: (data) => {
                 let val = parseFloat(data.trim());
-                if (!isNaN(val)) {
-                    cpuUsage = Math.round(val) + "%";
-                }
+                if (!isNaN(val)) cpuUsage = Math.round(val) + "%";
             }
         }
     }
@@ -45,39 +41,38 @@ RowLayout {
         }
     }
     
-    // Update every 2 seconds
     Timer {
-        interval: 2000
+        interval: 2500
         running: true
         repeat: true
         onTriggered: {
-            cpuProc.running = false;
-            ramProc.running = false;
-            cpuProc.running = true;
-            ramProc.running = true;
+            cpuProc.running = false; cpuProc.running = true;
+            ramProc.running = false; ramProc.running = true;
         }
     }
     
+    // Layout
     Text {
-        text: "CPU: " + cpuUsage
+        text: "CPU " + cpuUsage
         color: Config.fg
-        opacity: 0.8
-        font.family: Config.sansFont
+        opacity: 0.7
+        font.family: Config.monoFont
         font.pointSize: Config.fontSize - 1
     }
     
-    Rectangle {
-        width: 1
-        height: 12
+    Text {
+        text: "RAM " + ramUsage
         color: Config.fg
-        opacity: 0.2
+        opacity: 0.7
+        font.family: Config.monoFont
+        font.pointSize: Config.fontSize - 1
     }
     
     Text {
-        text: "BAT: " + batteryText
-        color: Config.fg
-        opacity: 0.8
-        font.family: Config.sansFont
+        text: "BAT " + batteryText
+        color: Config.accent
+        font.family: Config.monoFont
         font.pointSize: Config.fontSize - 1
+        font.bold: true
     }
 }
