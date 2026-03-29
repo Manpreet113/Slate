@@ -146,6 +146,7 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
         "intel-ucode",
         "amd-ucode",
         "btrfs-progs",
+        "libgit2",
         "sudo",
         "networkmanager",
         "bluez",

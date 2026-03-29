@@ -37,6 +37,8 @@ pub fn chroot_stage() -> Result<()> {
 fn configure_base(config: &UserInfo) -> Result<()> {
     println!("  > Configuring Base System...");
 
+    enable_multilib_repo()?;
+
     // Hostname
     fs::write("/etc/hostname", format!("{}\n", config.hostname))?;
 
@@ -64,6 +66,30 @@ fn configure_base(config: &UserInfo) -> Result<()> {
 
     // Time & NTP
     run_command("hwclock", &["--systohc"])?;
+
+    Ok(())
+}
+
+fn enable_multilib_repo() -> Result<()> {
+    let pacman_conf = "/etc/pacman.conf";
+    if !Path::new(pacman_conf).exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(pacman_conf)?;
+    if content.contains("\n[multilib]\n") {
+        return Ok(());
+    }
+
+    // Common Arch default has multilib commented out as two lines.
+    let updated = content
+        .replace("#[multilib]", "[multilib]")
+        .replace("#Include = /etc/pacman.d/mirrorlist", "Include = /etc/pacman.d/mirrorlist");
+
+    if updated != content {
+        fs::write(pacman_conf, updated)?;
+        run_command("pacman", &["-Sy", "--noconfirm"])?;
+    }
 
     Ok(())
 }
