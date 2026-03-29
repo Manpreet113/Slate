@@ -274,8 +274,14 @@ where
                     },
                     AppState::UserSetupHostname => match key.code {
                         KeyCode::Enter => {
-                            app.user_info.hostname = app.input.drain(..).collect();
-                            app.state = AppState::UserSetupUsername;
+                            let hostname = app.input.trim().to_string();
+                            if !is_valid_hostname(&hostname) {
+                                app.logs.push("[Err] Invalid hostname. Use letters, digits, and '-' (not at start/end).".to_string());
+                            } else {
+                                app.user_info.hostname = hostname;
+                                app.input.clear();
+                                app.state = AppState::UserSetupUsername;
+                            }
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
@@ -284,8 +290,14 @@ where
                     },
                     AppState::UserSetupUsername => match key.code {
                         KeyCode::Enter => {
-                            app.user_info.username = app.input.drain(..).collect();
-                            app.state = AppState::UserSetupPassword;
+                            let username = app.input.trim().to_string();
+                            if !is_valid_username(&username) {
+                                app.logs.push("[Err] Invalid username. Use 1-32 chars: lowercase letters, digits, '_' or '-' (must start with lowercase/_).".to_string());
+                            } else {
+                                app.user_info.username = username;
+                                app.input.clear();
+                                app.state = AppState::UserSetupPassword;
+                            }
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
@@ -294,8 +306,14 @@ where
                     },
                     AppState::UserSetupPassword => match key.code {
                         KeyCode::Enter => {
-                            app.user_info.password = app.input.drain(..).collect();
-                            app.state = AppState::UserSetupGitName;
+                            let password = app.input.trim().to_string();
+                            if password.is_empty() {
+                                app.logs.push("[Err] Password cannot be empty.".to_string());
+                            } else {
+                                app.user_info.password = password;
+                                app.input.clear();
+                                app.state = AppState::UserSetupGitName;
+                            }
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
@@ -355,6 +373,36 @@ where
 
 fn is_input_state(state: &AppState) -> bool {
     matches!(state, AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail)
+}
+
+fn is_valid_hostname(value: &str) -> bool {
+    if value.is_empty() || value.len() > 63 {
+        return false;
+    }
+
+    if value.starts_with('-') || value.ends_with('-') {
+        return false;
+    }
+
+    value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+fn is_valid_username(value: &str) -> bool {
+    if value.is_empty() || value.len() > 32 {
+        return false;
+    }
+
+    let mut chars = value.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    if !(first.is_ascii_lowercase() || first == '_') {
+        return false;
+    }
+
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 fn ui(f: &mut Frame, app: &mut App) {

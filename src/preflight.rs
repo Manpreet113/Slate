@@ -43,7 +43,22 @@ pub fn run_checks(device: &str) -> Result<Vec<String>> {
 fn check_mounts(device: &str) -> Result<()> {
     let mounts = fs::read_to_string("/proc/mounts")?;
     for line in mounts.lines() {
-        if line.contains(device) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let source = parts[0];
+        let is_target = source == device
+            || source.starts_with(&format!("{}p", device))
+            || (source.starts_with(device)
+                && source
+                    .chars()
+                    .nth(device.len())
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false));
+
+        if is_target {
             bail!("Device {} is currently mounted!", device);
         }
     }
@@ -51,7 +66,17 @@ fn check_mounts(device: &str) -> Result<()> {
 }
 
 fn check_tools() -> Result<()> {
-    let tools = ["sgdisk", "mkfs.btrfs", "arch-chroot", "pacstrap", "mkinitcpio", "bootctl", "curl"];
+    let tools = [
+        "sgdisk",
+        "mkfs.btrfs",
+        "mkfs.vfat",
+        "btrfs",
+        "arch-chroot",
+        "pacstrap",
+        "mkinitcpio",
+        "bootctl",
+        "curl",
+    ];
     let mut missing = Vec::new();
     for tool in tools {
         let status = Command::new("sh").arg("-c").arg(format!("command -v {}", tool)).status();

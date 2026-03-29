@@ -71,8 +71,15 @@ pub fn list_block_devices() -> Result<Vec<BlockDevice>> {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
 
-        // Skip partitions (e.g. sda1, nvme0n1p1) and loop devices
-        if name.starts_with("loop") || name.contains('p') || (name.starts_with("sd") && name.len() > 3) {
+        // Skip pseudo and non-install targets.
+        if name.starts_with("loop")
+            || name.starts_with("ram")
+            || name.starts_with("zram")
+            || name.starts_with("dm-")
+            || name.starts_with("md")
+            || name.starts_with("sr")
+            || name.starts_with("fd")
+        {
             continue;
         }
 

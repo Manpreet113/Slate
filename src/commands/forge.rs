@@ -7,6 +7,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::thread::sleep;
+use std::time::Duration;
 
 /// The entry point for `slate install`
 pub fn forge() -> Result<()> {
@@ -79,12 +82,25 @@ fn cleansing(device: &str, tx: &Sender<InstallMsg>) -> Result<()> {
     run_cmd_captured("sgdisk", &["-n", "2:0:0", "-t", "2:8300", device], tx)?;
 
     let efi_part = resolve_partition(device, 1);
+    wait_for_partition(&efi_part, tx)?;
     run_cmd_captured("mkfs.vfat", &["-F32", "-n", "EFI", &efi_part], tx)?;
 
     let root_part = resolve_partition(device, 2);
+    wait_for_partition(&root_part, tx)?;
     run_cmd_captured("mkfs.btrfs", &["-f", "-L", "Arch", &root_part], tx)?;
 
     Ok(())
+}
+
+fn wait_for_partition(part_path: &str, tx: &Sender<InstallMsg>) -> Result<()> {
+    for _ in 0..50 {
+        if Path::new(part_path).exists() {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(200));
+    }
+    let _ = tx.send(InstallMsg::Log(format!("[Err] Partition node not ready: {}", part_path)));
+    bail!("Partition node not ready: {}", part_path)
 }
 
 fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>) -> Result<()> {
@@ -120,19 +136,30 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
 }
 
 fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
+    // Keep pacstrap minimal and reliable. Non-essential desktop/tooling packages
+    // are installed later via Ax as the regular user in chroot.
     let packages = [
-        "base", "base-devel", "linux", "linux-firmware", "intel-ucode", "amd-ucode", "btrfs-progs",
-        "sudo", "networkmanager", "bluez", "bluez-utils", "git", "zsh", "starship",
-        "hyprland", "hyprlock", "hypridle", "xdg-desktop-portal-hyprland", "qt6-wayland",
-        "pipewire", "wireplumber", "pipewire-pulse", "pipewire-alsa",
-        "firefox", "kitty",
-        "eza", "bat", "zoxide", "fzf", "ripgrep", "curl"
+        "base",
+        "base-devel",
+        "linux",
+        "linux-firmware",
+        "intel-ucode",
+        "amd-ucode",
+        "btrfs-progs",
+        "sudo",
+        "networkmanager",
+        "bluez",
+        "bluez-utils",
+        "git",
+        "zsh",
+        "curl",
     ];
 
     tx.send(InstallMsg::Log("Updating Arch Linux Keyring...".to_string()))?;
     let _ = run_cmd_captured("pacman", &["-Sy", "archlinux-keyring", "--noconfirm"], tx);
 
-    tx.send(InstallMsg::Log("Starting Pacstrap (Desktop Experience)...".to_string()))?;
+    tx.send(InstallMsg::Log("[Phase 1/3] pacstrap essentials".to_string()))?;
+    tx.send(InstallMsg::Log("Starting Pacstrap (Essentials)...".to_string()))?;
     let mut args = vec!["-K", "/mnt"];
     args.extend(packages.iter());
     run_cmd_captured("pacstrap", &args, tx)?;
@@ -153,7 +180,7 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
 
 fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result<()> {
     let _ = tx.send(InstallMsg::Log(format!("$ {} {}", cmd, args.join(" "))));
-    
+
     let mut child = Command::new(cmd)
         .args(args)
         .stdout(Stdio::piped())
@@ -162,11 +189,13 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
 
     let stdout = child.stdout.take().context("Failed to open stdout")?;
     let stderr = child.stderr.take().context("Failed to open stderr")?;
-    
+
     let tx_out = tx.clone();
     let tx_err = tx.clone();
+    let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_lines_for_thread = Arc::clone(&stderr_lines);
 
-    std::thread::spawn(move || {
+    let out_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             if let Ok(l) = line {
@@ -175,18 +204,47 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
         }
     });
 
-    std::thread::spawn(move || {
+    let err_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             if let Ok(l) = line {
+                if let Ok(mut captured) = stderr_lines_for_thread.lock() {
+                    captured.push(l.clone());
+                    if captured.len() > 200 {
+                        let drop_n = captured.len() - 200;
+                        captured.drain(0..drop_n);
+                    }
+                }
                 let _ = tx_err.send(InstallMsg::Log(format!("[Err] {}", l)));
             }
         }
     });
 
     let status = child.wait()?;
+    let _ = out_handle.join();
+    let _ = err_handle.join();
+
     if !status.success() {
-        bail!("Command failed: {}", cmd);
+        let code = status.code().map_or("signal".to_string(), |c| c.to_string());
+        let stderr_tail = stderr_lines
+            .lock()
+            .ok()
+            .map(|v| v.iter().rev().take(5).cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
+
+        if stderr_tail.is_empty() {
+            bail!("Command failed: {} (exit {})", cmd, code);
+        }
+
+        bail!(
+            "Command failed: {} (exit {})\nRecent stderr:\n{}",
+            cmd,
+            code,
+            stderr_tail.join("\n")
+        );
     }
     Ok(())
 }

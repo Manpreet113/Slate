@@ -25,7 +25,10 @@ pub fn chroot_stage() -> Result<()> {
     // 5. Tooling (Ax, VSCode, Clipse, Git)
     configure_tools(&user_info)?;
 
-    // 6. Bootloader
+    // 6. Post-config Services
+    configure_post_services()?;
+
+    // 7. Bootloader
     configure_boot()?;
 
     Ok(())
@@ -61,9 +64,6 @@ fn configure_base(config: &UserInfo) -> Result<()> {
 
     // Time & NTP
     run_command("hwclock", &["--systohc"])?;
-    run_command("systemctl", &["enable", "systemd-timesyncd"])?;
-    run_command("systemctl", &["enable", "NetworkManager"])?;
-    run_command("systemctl", &["enable", "bluetooth"])?;
 
     Ok(())
 }
@@ -148,7 +148,6 @@ monitor=,preferred,auto,auto
 exec-once = hyprlock
 
 # Core Services
-exec-once = elysium
 exec-once = clipse -listen
 
 $terminal = kitty
@@ -207,6 +206,7 @@ bindm = SUPER, mouse:273, resizewindow
 }
 
 fn configure_tools(config: &UserInfo) -> Result<()> {
+    println!("[Phase 2/3] Ax user packages");
     println!("  > Finalizing Tools (Ax, Git, VSCode, Clipse)...");
 
     // Git Config
@@ -221,18 +221,81 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     }
 
     // AUR Packages via Ax
-    println!("  > Installing AUR Packages via Ax (vscode, clipse, elysium dependencies)...");
-    
-    let elysium_deps = "quickshell-git matugen-bin gpu-screen-recorder wl-clip-persist mpvpaper gradia ttf-phosphor-icons ttf-league-gothic adw-gtk-theme network-manager-applet blueman pavucontrol easyeffects grim slurp imagemagick jq sqlite upower wl-clipboard wlsunset wtype zbar glib2 zenity power-profiles-daemon ttf-roboto ttf-roboto-mono ttf-dejavu ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-nerd-fonts-symbols";
-    
-    // Using 'su - username -c' to avoid sudo password prompts for local builds
-    let ax_cmd = format!("ax -S visual-studio-code-bin clipse {} --noconfirm", elysium_deps);
-    let _ = Command::new("su")
-        .args(["-", &config.username, "-c", &ax_cmd])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    println!("  > Installing desktop/tooling packages via Ax as user...");
+    let packages = [
+        // Desktop/session
+        "hyprland",
+        "hyprlock",
+        "hypridle",
+        "xdg-desktop-portal-hyprland",
+        "qt6-wayland",
+        // Audio/media
+        "pipewire",
+        "wireplumber",
+        "pipewire-pulse",
+        "pipewire-alsa",
+        // Apps and CLI tools
+        "firefox",
+        "kitty",
+        "wofi",
+        "starship",
+        "eza",
+        "bat",
+        "zoxide",
+        "fzf",
+        "ripgrep",
+        // Utilities and extras
+        "network-manager-applet",
+        "blueman",
+        "pavucontrol",
+        "easyeffects",
+        "grim",
+        "slurp",
+        "imagemagick",
+        "jq",
+        "sqlite",
+        "upower",
+        "wl-clipboard",
+        "wlsunset",
+        "wtype",
+        "zbar",
+        "glib2",
+        "zenity",
+        "power-profiles-daemon",
+        // Fonts and AUR tooling packages
+        "ttf-roboto",
+        "ttf-roboto-mono",
+        "ttf-dejavu",
+        "ttf-liberation",
+        "noto-fonts",
+        "noto-fonts-cjk",
+        "noto-fonts-emoji",
+        "ttf-nerd-fonts-symbols",
+        "quickshell-git",
+        "matugen-bin",
+        "gpu-screen-recorder",
+        "wl-clip-persist",
+        "mpvpaper",
+        "gradia",
+        "ttf-phosphor-icons",
+        "ttf-league-gothic",
+        "adw-gtk-theme",
+        "visual-studio-code-bin",
+        "clipse",
+    ];
 
+    let ax_cmd = format!("ax -S {} --noconfirm", packages.join(" "));
+    run_command("su", &["-", &config.username, "-c", &ax_cmd])?;
+
+    Ok(())
+}
+
+fn configure_post_services() -> Result<()> {
+    println!("[Phase 3/3] post-config services");
+    println!("  > Enabling core services...");
+    run_command("systemctl", &["enable", "systemd-timesyncd"])?;
+    run_command("systemctl", &["enable", "NetworkManager"])?;
+    run_command("systemctl", &["enable", "bluetooth"])?;
     Ok(())
 }
 
@@ -259,15 +322,17 @@ fn configure_boot() -> Result<()> {
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     println!("    $ {} {}", cmd, args.join(" "));
-    let status = Command::new(cmd)
+    let output = Command::new(cmd)
         .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .context(format!("Failed to run {}", cmd))?;
 
-    if !status.success() {
-        bail!("Command failed: {}", cmd);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            bail!("Command failed: {}", cmd);
+        }
+        bail!("Command failed: {}: {}", cmd, stderr);
     }
     Ok(())
 }
@@ -276,17 +341,21 @@ fn run_command_stdin(cmd: &str, args: &[&str], input: &str) -> Result<()> {
     let mut child = Command::new(cmd)
         .args(args)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(input.as_bytes())?;
     }
 
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("Command {} failed", cmd);
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            bail!("Command {} failed", cmd);
+        }
+        bail!("Command {} failed: {}", cmd, stderr);
     }
     Ok(())
 }
