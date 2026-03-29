@@ -310,8 +310,16 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "clipse",
     ];
 
+    let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
+    let sudoers_content = format!("{} ALL=(ALL:ALL) NOPASSWD: ALL\n", config.username);
+    fs::write(&sudoers_dropin, sudoers_content)?;
+    run_command("chmod", &["0440", &sudoers_dropin])?;
+
     let ax_cmd = format!("ax -S {} --noconfirm", packages.join(" "));
-    run_command("su", &["-", &config.username, "-c", &ax_cmd])?;
+    let install_res = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
+
+    let _ = fs::remove_file(&sudoers_dropin);
+    install_res?;
 
     Ok(())
 }
