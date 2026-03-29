@@ -337,20 +337,10 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "noto-fonts-cjk",
         "noto-fonts-emoji",
         "ttf-nerd-fonts-symbols",
-        "quickshell-git",
-        "matugen-bin",
         "gpu-screen-recorder",
-        "wl-clip-persist",
-        "mpvpaper",
-        "gradia",
         "adw-gtk-theme",
         "visual-studio-code-bin",
         "clipse",
-    ];
-
-    let optional_packages = [
-        "ttf-league-gothic",
-        "ttf-phosphor-icons",
     ];
 
     let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
@@ -363,14 +353,6 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
 
     let _ = fs::remove_file(&sudoers_dropin);
     install_res?;
-
-    if !optional_packages.is_empty() {
-        println!("  > Installing optional packages via Ax (non-fatal)...");
-        let optional_cmd = format!("ax -S {} --noconfirm", optional_packages.join(" "));
-        if let Err(err) = run_command("su", &["-", &config.username, "-c", &optional_cmd]) {
-            println!("  ! Optional package install failed: {}", err);
-        }
-    }
 
     Ok(())
 }
