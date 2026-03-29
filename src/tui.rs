@@ -478,6 +478,23 @@ fn current_step(state: &AppState) -> (&'static str, u16, u16) {
     }
 }
 
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = input.chars().count();
+    if count <= max_chars {
+        return input.to_string();
+    }
+    if max_chars <= 1 {
+        return "...".chars().take(max_chars).collect();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = input.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
 fn help_text_for_state(state: &AppState) -> &'static str {
     match state {
         AppState::Welcome => "Enter: Begin | q: Quit",
@@ -542,10 +559,13 @@ fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(p, chunks[1]);
         }
         AppState::SelectingDisk => {
+            let available = chunks[1].width.saturating_sub(10) as usize;
+            let model_max = available.saturating_sub(26).max(10);
             let items: Vec<ListItem> = app
                 .devices
                 .iter()
                 .map(|d| {
+                    let model = truncate_with_ellipsis(&d.model, model_max);
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:<14}", d.path),
@@ -554,7 +574,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                         Span::raw("  "),
                         Span::styled(format!("{:>8}", d.size), Style::default().fg(theme.accent_soft)),
                         Span::raw("  "),
-                        Span::styled(d.model.clone(), Style::default().fg(theme.muted)),
+                        Span::styled(model, Style::default().fg(theme.muted)),
                     ]))
                 })
                 .collect();
@@ -592,7 +612,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(theme.border))
-                        .title("Results (Up/Down to scroll)".fg(theme.accent).bold())
+                        .title("Results".fg(theme.accent).bold())
                 )
                 .highlight_symbol("▶ ")
                 .highlight_style(Style::default().fg(theme.accent).bg(theme.selection_bg).add_modifier(Modifier::BOLD));
@@ -603,8 +623,8 @@ fn ui(f: &mut Frame, app: &mut App) {
                 AppState::UserSetupHostname => "Hostname:",
                 AppState::UserSetupUsername => "Username:",
                 AppState::UserSetupPassword => "Password:",
-                AppState::UserSetupGitName => "Git Username (Optional, Enter to skip):",
-                AppState::UserSetupGitEmail => "Git Email (Optional, Enter to skip):",
+                AppState::UserSetupGitName => "Git Username (Optional):",
+                AppState::UserSetupGitEmail => "Git Email (Optional):",
                 _ => "",
             };
             let text = if app.state == AppState::UserSetupPassword { "*".repeat(app.input.len()) } else { app.input.clone() };
@@ -667,7 +687,8 @@ fn ui(f: &mut Frame, app: &mut App) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border))
                     .title("Validation".fg(theme.accent).bold())
-            );
+            )
+            .wrap(Wrap { trim: true });
             f.render_widget(status_panel, sub_chunks[1]);
         }
         AppState::Confirmation => {
@@ -694,7 +715,8 @@ fn ui(f: &mut Frame, app: &mut App) {
                  Line::from(Span::styled("Git Config", Style::default().fg(theme.muted))),
                  Line::from(""),
                  Line::from(Span::styled("Action", Style::default().fg(theme.muted))),
-             ]);
+             ])
+             .wrap(Wrap { trim: true });
 
              let disk_value = app
                  .selected_disk
@@ -718,7 +740,8 @@ fn ui(f: &mut Frame, app: &mut App) {
                  Line::from(Span::raw(git_value)),
                  Line::from(""),
                  Line::from(Span::styled("Press Enter to CONFIRM and INSTALL", Style::default().fg(theme.accent_soft).add_modifier(Modifier::BOLD))),
-             ]);
+             ])
+             .wrap(Wrap { trim: true });
 
              f.render_widget(labels, cols[0]);
              f.render_widget(values, cols[1]);
@@ -800,6 +823,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     let help = Paragraph::new(help_text_for_state(&app.state))
         .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border)).title("Keys".fg(theme.accent).bold()))
         .style(Style::default().fg(theme.muted))
-        .alignment(ratatui::layout::Alignment::Center);
+        .alignment(ratatui::layout::Alignment::Center)
+        .wrap(Wrap { trim: true });
     f.render_widget(help, chunks[2]);
 }
