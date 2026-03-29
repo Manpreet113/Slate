@@ -77,14 +77,54 @@ fn enable_multilib_repo() -> Result<()> {
     }
 
     let content = fs::read_to_string(pacman_conf)?;
-    if content.contains("\n[multilib]\n") {
+    if content.contains("\n[multilib]\n") && content.contains("\nInclude = /etc/pacman.d/mirrorlist\n") {
         return Ok(());
     }
 
-    // Common Arch default has multilib commented out as two lines.
-    let updated = content
-        .replace("#[multilib]", "[multilib]")
-        .replace("#Include = /etc/pacman.d/mirrorlist", "Include = /etc/pacman.d/mirrorlist");
+    // Enable only the [multilib] block include, not any Include line in [options].
+    let mut updated_lines: Vec<String> = Vec::new();
+    let mut in_multilib = false;
+    let mut saw_multilib = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "#[multilib]" {
+            updated_lines.push("[multilib]".to_string());
+            in_multilib = true;
+            saw_multilib = true;
+            continue;
+        }
+        if trimmed == "[multilib]" {
+            updated_lines.push(line.to_string());
+            in_multilib = true;
+            saw_multilib = true;
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed != "[multilib]" {
+            in_multilib = false;
+        }
+
+        if in_multilib && trimmed == "#Include = /etc/pacman.d/mirrorlist" {
+            updated_lines.push("Include = /etc/pacman.d/mirrorlist".to_string());
+            continue;
+        }
+
+        updated_lines.push(line.to_string());
+    }
+
+    let mut updated = updated_lines.join("\n");
+    if content.ends_with('\n') {
+        updated.push('\n');
+    }
+
+    if !saw_multilib {
+        if !updated.ends_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str("\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n");
+    }
 
     if updated != content {
         fs::write(pacman_conf, updated)?;
@@ -304,10 +344,13 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "mpvpaper",
         "gradia",
         "ttf-phosphor-icons",
-        "ttf-league-gothic",
         "adw-gtk-theme",
         "visual-studio-code-bin",
         "clipse",
+    ];
+
+    let optional_packages = [
+        "ttf-league-gothic",
     ];
 
     let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
@@ -320,6 +363,14 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
 
     let _ = fs::remove_file(&sudoers_dropin);
     install_res?;
+
+    if !optional_packages.is_empty() {
+        println!("  > Installing optional packages via Ax (non-fatal)...");
+        let optional_cmd = format!("ax -S {} --noconfirm", optional_packages.join(" "));
+        if let Err(err) = run_command("su", &["-", &config.username, "-c", &optional_cmd]) {
+            println!("  ! Optional package install failed: {}", err);
+        }
+    }
 
     Ok(())
 }
