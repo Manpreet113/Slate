@@ -12,7 +12,6 @@ As of right now, Slate primarily functions as an Arch Linux installer. It handle
 - Zero-typing automatic partitioning (1GB EFI + remaining Btrfs).
 - Automated Btrfs subvolume layout (`@`, `@home`, `@log`, `@pkg`, `@snapshots`).
 - Bootloader setup and `ax` tool installation.
-- Native injection of the custom **Elysium Shell** desktop environment.
 
 ## Usage
 

@@ -38,8 +38,8 @@ jobs:
         restore-keys: |
           archlinux-cargo-
 
-    - name: Check Formatting
-      run: cargo fmt --check || true
+    - name: Do Formatting
+      run: cargo fmt 
 
     - name: Clippy Linting
       run: cargo clippy -- -D warnings || true

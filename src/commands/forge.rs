@@ -141,32 +141,12 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
     let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
     fs::write("/mnt/etc/fstab", output.stdout)?;
 
-    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax) and Elysium Shell...".to_string()))?;
+    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax)...".to_string()))?;
     let current_exe = std::env::current_exe()?;
     fs::copy(&current_exe, "/mnt/usr/local/bin/slate")?;
-    
-    // Fetch and install the Elysium shell directory
-    tx.send(InstallMsg::Log("Installing Elysium Shell components from remote via curl...".to_string()))?;
-    fs::create_dir_all("/mnt/usr/share")?;
-    let _ = run_cmd_captured("rm", &["-rf", "/mnt/usr/share/elysium"], tx);
-    
-    // We use the host's native curl & tar to completely bypass any chroot DNS resolution weirdness
-    run_cmd_captured("curl", &["-sL", "https://github.com/manpreet113/slate/archive/refs/heads/main.tar.gz", "-o", "/mnt/opt/slate.tar.gz"], tx)?;
-    run_cmd_captured("tar", &["-xzf", "/mnt/opt/slate.tar.gz", "-C", "/mnt/opt/"], tx)?;
-    run_cmd_captured("mv", &["/mnt/opt/Slate-main/shell", "/mnt/usr/share/elysium"], tx)?;
-    let _ = run_cmd_captured("rm", &["-rf", "/mnt/opt/Slate-main", "/mnt/opt/slate.tar.gz"], tx);
-    
-    // Create the Elysium global launcher script
-    let launcher_content = r#"#!/usr/bin/env bash
-export PATH="$HOME/.local/bin:$PATH"
-export QML2_IMPORT_PATH="/usr/share/elysium/modules:$QML2_IMPORT_PATH"
-export QML_IMPORT_PATH="$QML2_IMPORT_PATH"
-exec quickshell -p /usr/share/elysium "$@"
-"#;
-    fs::write("/mnt/usr/local/bin/elysium", launcher_content)?;
 
     run_cmd_captured("curl", &["-L", "https://github.com/manpreet113/ax/releases/latest/download/ax", "-o", "/mnt/usr/local/bin/ax"], tx)?;
-    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate", "/mnt/usr/local/bin/elysium"], tx)?;
+    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate"], tx)?;
 
     Ok(())
 }
