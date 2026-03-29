@@ -343,7 +343,6 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "wl-clip-persist",
         "mpvpaper",
         "gradia",
-        "ttf-phosphor-icons",
         "adw-gtk-theme",
         "visual-studio-code-bin",
         "clipse",
@@ -351,6 +350,7 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
 
     let optional_packages = [
         "ttf-league-gothic",
+        "ttf-phosphor-icons",
     ];
 
     let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
