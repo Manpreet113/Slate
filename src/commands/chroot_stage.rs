@@ -252,13 +252,13 @@ animations {{
     animation = workspaces, 1, 6, default
 }}
 
-bind = SUPER, Enter, exec, $terminal
+bind = SUPER, Return, exec, $terminal
 bind = SUPER, B, exec, $browser
 bind = SUPER, Q, killactive,
 bind = SUPER, M, exit,
-bind = SUPER, V, togglefloating,
+bind = SUPER, F, togglefloating,
 bind = SUPER, Space, exec, wofi --show drun
-bind = SUPER, C, exec, kitty -e clipse
+bind = SUPER, V, exec, kitty -e clipse
 
 # Mouse bindings
 bindm = SUPER, mouse:272, movewindow
