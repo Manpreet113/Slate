@@ -8,6 +8,8 @@ use crossterm::{
 use ratatui::{
     backend::{CrosstermBackend, Backend},
     layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge, Wrap},
     Frame, Terminal,
     prelude::Stylize,
@@ -77,6 +79,7 @@ pub struct App {
     pub timezones: Vec<String>,
     pub filtered_items: Vec<String>,
     pub logs: Vec<String>,
+    pub log_scroll: usize,
     pub progress: u16,
     pub rx: Option<Receiver<InstallMsg>>,
 }
@@ -99,6 +102,7 @@ impl App {
             timezones,
             filtered_items: Vec::new(),
             logs: vec!["[System] App Initialized".to_string()],
+            log_scroll: 0,
             progress: 0,
             rx: None,
         }
@@ -156,7 +160,29 @@ impl App {
         };
         self.list_state.select(Some(i));
     }
+
+    fn max_log_scroll(&self) -> usize {
+        self.logs.len().saturating_sub(INSTALL_LOG_WINDOW)
+    }
+
+    fn scroll_logs_up(&mut self, amount: usize) {
+        self.log_scroll = (self.log_scroll + amount).min(self.max_log_scroll());
+    }
+
+    fn scroll_logs_down(&mut self, amount: usize) {
+        self.log_scroll = self.log_scroll.saturating_sub(amount);
+    }
+
+    fn scroll_logs_home(&mut self) {
+        self.log_scroll = self.max_log_scroll();
+    }
+
+    fn scroll_logs_end(&mut self) {
+        self.log_scroll = 0;
+    }
 }
+
+const INSTALL_LOG_WINDOW: usize = 30;
 
 pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
 where
@@ -360,7 +386,15 @@ where
                             return Ok(());
                         }
                     }
-                    AppState::Installing => {}
+                    AppState::Installing => match key.code {
+                        KeyCode::Up => app.scroll_logs_up(1),
+                        KeyCode::Down => app.scroll_logs_down(1),
+                        KeyCode::PageUp => app.scroll_logs_up(10),
+                        KeyCode::PageDown => app.scroll_logs_down(10),
+                        KeyCode::Home => app.scroll_logs_home(),
+                        KeyCode::End => app.scroll_logs_end(),
+                        _ => {}
+                    }
                 }
                 
                 if key.code == KeyCode::Char('q') && !is_input_state(&app.state) {
@@ -405,7 +439,64 @@ fn is_valid_username(value: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
+#[derive(Clone, Copy)]
+struct UiTheme {
+    accent: Color,
+    accent_soft: Color,
+    border: Color,
+    muted: Color,
+    success: Color,
+    error: Color,
+    selection_bg: Color,
+}
+
+impl Default for UiTheme {
+    fn default() -> Self {
+        Self {
+            accent: Color::Cyan,
+            accent_soft: Color::LightBlue,
+            border: Color::DarkGray,
+            muted: Color::Gray,
+            success: Color::Green,
+            error: Color::Red,
+            selection_bg: Color::DarkGray,
+        }
+    }
+}
+
+fn current_step(state: &AppState) -> (&'static str, u16, u16) {
+    let total = 8;
+    match state {
+        AppState::Welcome | AppState::UserSetupKeymap => ("Keymap", 1, total),
+        AppState::SelectingDisk => ("Disk", 2, total),
+        AppState::UserSetupTimezone => ("Timezone", 3, total),
+        AppState::UserSetupHostname => ("Hostname", 4, total),
+        AppState::UserSetupUsername => ("Username", 5, total),
+        AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail => ("Credentials", 6, total),
+        AppState::Confirmation => ("Confirm", 7, total),
+        AppState::Installing | AppState::Finished | AppState::Error(_) => ("Install", 8, total),
+    }
+}
+
+fn help_text_for_state(state: &AppState) -> &'static str {
+    match state {
+        AppState::Welcome => "Enter: Begin | q: Quit",
+        AppState::SelectingDisk | AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
+            "Up/Down: Move | Enter: Select | Esc: Back | q: Quit"
+        }
+        AppState::UserSetupHostname
+        | AppState::UserSetupUsername
+        | AppState::UserSetupPassword
+        | AppState::UserSetupGitName
+        | AppState::UserSetupGitEmail => "Type: Input | Backspace: Delete | Enter: Continue | Esc: Back",
+        AppState::Confirmation => "Enter: Install | Esc/N: Back | q: Quit",
+        AppState::Installing => "Up/Down: Scroll logs | PgUp/PgDn: Faster | Home/End: Oldest/Latest",
+        AppState::Finished | AppState::Error(_) => "Enter/q: Exit",
+    }
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
+    let theme = UiTheme::default();
     let size = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -417,34 +508,94 @@ fn ui(f: &mut Frame, app: &mut App) {
         ])
         .split(size);
 
-    let title = Paragraph::new("SLATE ARCH LINUX INSTALLER")
-        .block(Block::default().borders(Borders::ALL))
+    let header_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(chunks[0]);
+
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("SLATE", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled("  ARCH LINUX INSTALLER", Style::default().fg(theme.accent_soft)),
+    ]))
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border)))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(title, chunks[0]);
+    f.render_widget(title, header_chunks[0]);
+
+    let (step_name, step_idx, step_total) = current_step(&app.state);
+    let step_percent = (step_idx * 100 / step_total) as u16;
+    let step = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border)).title("Setup Progress".fg(theme.accent).bold()))
+        .percent(step_percent)
+        .label(format!("STEP {}/{} {}", step_idx, step_total, step_name))
+        .gauge_style(Style::default().fg(theme.accent));
+    f.render_widget(step, header_chunks[1]);
 
     match &app.state {
         AppState::Welcome => {
             let p = Paragraph::new("Welcome to Slate!\n\nThis will install an opinionated Arch/Hyprland Desktop.\n\nPress Enter to begin.")
-                .block(Block::default().borders(Borders::ALL));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title("Welcome".fg(theme.accent).bold())
+                );
             f.render_widget(p, chunks[1]);
         }
         AppState::SelectingDisk => {
-            let items: Vec<ListItem> = app.devices.iter().map(|d| ListItem::new(format!("{} | {} | {}", d.path, d.size, d.model))).collect();
-            let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Select Disk")).highlight_symbol(">> ");
+            let items: Vec<ListItem> = app
+                .devices
+                .iter()
+                .map(|d| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!("{:<14}", d.path),
+                            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(format!("{:>8}", d.size), Style::default().fg(theme.accent_soft)),
+                        Span::raw("  "),
+                        Span::styled(d.model.clone(), Style::default().fg(theme.muted)),
+                    ]))
+                })
+                .collect();
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title("Select Disk".fg(theme.accent).bold())
+                )
+                .highlight_symbol("▶ ")
+                .highlight_style(
+                    Style::default()
+                        .fg(theme.accent)
+                        .bg(theme.selection_bg)
+                        .add_modifier(Modifier::BOLD),
+                );
             f.render_stateful_widget(list, chunks[1], &mut app.list_state);
         }
         AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
             let prompt = if app.state == AppState::UserSetupKeymap { "Search Keymap:" } else { "Search Timezone:" };
             let sub_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
             
-            let search_p = Paragraph::new(app.input.clone()).block(Block::default().borders(Borders::ALL).title(prompt));
+            let search_p = Paragraph::new(app.input.clone()).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title(prompt.fg(theme.accent).bold())
+            );
             f.render_widget(search_p, sub_chunks[0]);
             
             let items: Vec<ListItem> = app.filtered_items.iter().map(|i| ListItem::new(i.as_str())).collect();
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Results (Up/Down to scroll)"))
-                .highlight_symbol(">> ")
-                .highlight_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title("Results (Up/Down to scroll)".fg(theme.accent).bold())
+                )
+                .highlight_symbol("▶ ")
+                .highlight_style(Style::default().fg(theme.accent).bg(theme.selection_bg).add_modifier(Modifier::BOLD));
             f.render_stateful_widget(list, sub_chunks[1], &mut app.list_state);
         }
         AppState::UserSetupHostname | AppState::UserSetupUsername | AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail => {
@@ -457,33 +608,172 @@ fn ui(f: &mut Frame, app: &mut App) {
                 _ => "",
             };
             let text = if app.state == AppState::UserSetupPassword { "*".repeat(app.input.len()) } else { app.input.clone() };
-            let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(prompt));
-            f.render_widget(p, chunks[1]);
+            let sub_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Length(3), Constraint::Min(1)])
+                .split(chunks[1]);
+
+            let p = Paragraph::new(text).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title(prompt.fg(theme.accent).bold())
+            );
+            f.render_widget(p, sub_chunks[0]);
+
+            let trimmed = app.input.trim();
+            let (status, status_style) = match app.state {
+                AppState::UserSetupHostname => {
+                    if trimmed.is_empty() {
+                        ("Required: letters, digits, '-' (not at start/end)", Style::default().fg(theme.muted))
+                    } else if is_valid_hostname(trimmed) {
+                        ("Valid hostname", Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+                    } else {
+                        ("Invalid hostname format", Style::default().fg(theme.error).add_modifier(Modifier::BOLD))
+                    }
+                }
+                AppState::UserSetupUsername => {
+                    if trimmed.is_empty() {
+                        ("Required: starts with lowercase/_; then lowercase, digits, '_' or '-'", Style::default().fg(theme.muted))
+                    } else if is_valid_username(trimmed) {
+                        ("Valid username", Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+                    } else {
+                        ("Invalid username format", Style::default().fg(theme.error).add_modifier(Modifier::BOLD))
+                    }
+                }
+                AppState::UserSetupPassword => {
+                    if trimmed.is_empty() {
+                        ("Password is required", Style::default().fg(theme.error).add_modifier(Modifier::BOLD))
+                    } else {
+                        ("Password set", Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+                    }
+                }
+                AppState::UserSetupGitName | AppState::UserSetupGitEmail => {
+                    if trimmed.is_empty() {
+                        ("Optional: press Enter to skip", Style::default().fg(theme.muted))
+                    } else {
+                        ("Value captured", Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+                    }
+                }
+                _ => ("", Style::default().fg(theme.muted)),
+            };
+
+            let status_panel = Paragraph::new(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(theme.muted)),
+                Span::styled(status, status_style),
+            ]))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title("Validation".fg(theme.accent).bold())
+            );
+            f.render_widget(status_panel, sub_chunks[1]);
         }
         AppState::Confirmation => {
-             let text = format!(
-                 "Opinionated Configuration Summary:\n\nDisk: {}\nKeymap: {}\nTimezone: {}\nHostname: {}\nUser: {}\n\nDesktop: Hyprland + Zsh + Modern CLI Extras\nGit Config: {} <{}>\n\nPress Enter to CONFIRM and INSTALL.",
-                 app.devices[app.selected_disk.unwrap()].path,
-                 app.user_info.keymap,
-                 app.user_info.timezone,
-                 app.user_info.hostname,
-                 app.user_info.username,
-                 if app.user_info.git_name.is_empty() { "Skipped" } else { &app.user_info.git_name },
-                 if app.user_info.git_email.is_empty() { "Skipped" } else { &app.user_info.git_email }
-             );
-             let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Final Confirmation"));
-             f.render_widget(p, chunks[1]);
+             let panel = Block::default()
+                 .borders(Borders::ALL)
+                 .border_style(Style::default().fg(theme.border))
+                 .title("Final Confirmation".fg(theme.accent).bold());
+             let inner = panel.inner(chunks[1]);
+             f.render_widget(panel, chunks[1]);
+
+             let cols = Layout::default()
+                 .direction(Direction::Horizontal)
+                 .constraints([Constraint::Length(22), Constraint::Min(20)])
+                 .split(inner);
+
+             let labels = Paragraph::new(vec![
+                 Line::from(Span::styled("Disk", Style::default().fg(theme.muted))),
+                 Line::from(Span::styled("Keymap", Style::default().fg(theme.muted))),
+                 Line::from(Span::styled("Timezone", Style::default().fg(theme.muted))),
+                 Line::from(Span::styled("Hostname", Style::default().fg(theme.muted))),
+                 Line::from(Span::styled("User", Style::default().fg(theme.muted))),
+                 Line::from(""),
+                 Line::from(Span::styled("Desktop", Style::default().fg(theme.muted))),
+                 Line::from(Span::styled("Git Config", Style::default().fg(theme.muted))),
+                 Line::from(""),
+                 Line::from(Span::styled("Action", Style::default().fg(theme.muted))),
+             ]);
+
+             let disk_value = app
+                 .selected_disk
+                 .and_then(|i| app.devices.get(i))
+                 .map(|d| d.path.clone())
+                 .unwrap_or_else(|| "(none)".to_string());
+             let git_value = if app.user_info.git_name.is_empty() || app.user_info.git_email.is_empty() {
+                 "Skipped".to_string()
+             } else {
+                 format!("{} <{}>", app.user_info.git_name, app.user_info.git_email)
+             };
+
+             let values = Paragraph::new(vec![
+                 Line::from(Span::styled(disk_value, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))),
+                 Line::from(Span::raw(app.user_info.keymap.clone())),
+                 Line::from(Span::raw(app.user_info.timezone.clone())),
+                 Line::from(Span::raw(app.user_info.hostname.clone())),
+                 Line::from(Span::raw(app.user_info.username.clone())),
+                 Line::from(""),
+                 Line::from(Span::raw("Hyprland + Zsh + Modern CLI Extras")),
+                 Line::from(Span::raw(git_value)),
+                 Line::from(""),
+                 Line::from(Span::styled("Press Enter to CONFIRM and INSTALL", Style::default().fg(theme.accent_soft).add_modifier(Modifier::BOLD))),
+             ]);
+
+             f.render_widget(labels, cols[0]);
+             f.render_widget(values, cols[1]);
         }
         AppState::Installing | AppState::Finished => {
             let install_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
             
             let status_title = if app.state == AppState::Finished { "INSTALLATION COMPLETE!" } else { "Installing..." };
-            let gauge = Gauge::default().block(Block::default().borders(Borders::ALL).title(status_title)).percent(app.progress).gauge_style(if app.state == AppState::Finished { ratatui::style::Style::default().fg(ratatui::style::Color::Green) } else { ratatui::style::Style::default().fg(ratatui::style::Color::Cyan) });
+            let gauge = Gauge::default()
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title(status_title.fg(theme.accent).bold())
+                )
+                .percent(app.progress)
+                .gauge_style(if app.state == AppState::Finished {
+                    Style::default().fg(theme.success)
+                } else {
+                    Style::default().fg(theme.accent)
+                });
             f.render_widget(gauge, install_chunks[0]);
             
-            let log_text = app.logs.iter().rev().take(30).map(|l| l.as_str()).collect::<Vec<&str>>().join("\n");
-            let p = Paragraph::new(log_text)
-                .block(Block::default().borders(Borders::ALL).title("Logs"))
+            let end = app.logs.len().saturating_sub(app.log_scroll);
+            let start = end.saturating_sub(INSTALL_LOG_WINDOW);
+            let visible_logs = &app.logs[start..end];
+
+            let log_lines: Vec<Line> = visible_logs
+                .iter()
+                .map(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    let style = if l.starts_with("[Err]") || lower.starts_with("error") {
+                        Style::default().fg(theme.error).add_modifier(Modifier::BOLD)
+                    } else if lower.contains("warn") {
+                        Style::default().fg(Color::Yellow)
+                    } else if l.starts_with("$ ") {
+                        Style::default().fg(theme.accent_soft)
+                    } else {
+                        Style::default().fg(theme.muted)
+                    };
+                    Line::from(Span::styled(l.clone(), style))
+                })
+                .collect();
+            let logs_title = if app.log_scroll == 0 {
+                "Logs (latest)".to_string()
+            } else {
+                format!("Logs (scroll +{})", app.log_scroll)
+            };
+            let p = Paragraph::new(log_lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title(logs_title.fg(theme.accent).bold())
+                )
                 .wrap(Wrap { trim: false });
             f.render_widget(p, install_chunks[1]);
             
@@ -491,17 +781,25 @@ fn ui(f: &mut Frame, app: &mut App) {
                 let overlay = Rect::new(size.width / 4, size.height / 3, size.width / 2, size.height / 3);
                 f.render_widget(ratatui::widgets::Clear, overlay);
                 let p = Paragraph::new("\nSUCCESS\n\nInstallation Finished.\nYou can now reboot.\n\nPress Enter or 'q' to exit.")
-                    .block(Block::default().borders(Borders::ALL).fg(ratatui::style::Color::Green))
+                    .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.success)).title("Done".fg(theme.success).bold()))
                     .alignment(ratatui::layout::Alignment::Center);
                 f.render_widget(p, overlay);
             }
         }
         AppState::Error(e) => {
-            let p = Paragraph::new(format!("ERROR: {}\n\nPress Enter to exit.", e)).block(Block::default().borders(Borders::ALL).fg(ratatui::style::Color::Red));
+            let p = Paragraph::new(format!("ERROR: {}\n\nPress Enter to exit.", e)).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.error))
+                    .title("Installer Error".fg(theme.error).bold())
+            );
             f.render_widget(p, chunks[1]);
         }
     }
 
-    let help = Paragraph::new("Arrows: Scroll | Type: Search | Enter: Select/Skip | q: Quit").block(Block::default().borders(Borders::ALL)).alignment(ratatui::layout::Alignment::Center);
+    let help = Paragraph::new(help_text_for_state(&app.state))
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border)).title("Keys".fg(theme.accent).bold()))
+        .style(Style::default().fg(theme.muted))
+        .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[2]);
 }
