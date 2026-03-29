@@ -200,49 +200,87 @@ fi
 }
 
 fn configure_desktop(config: &UserInfo) -> Result<()> {
-    println!("  > Configuring Hyprland...");
+    println!("  > Configuring Modular Hyprland...");
 
     let user_home = format!("/home/{}", config.username);
     let hypr_dir = format!("{}/.config/hypr", user_home);
     fs::create_dir_all(&hypr_dir)?;
 
-    let hypr_conf = format!(r#"
-# slate-desktop: direct-boot hyprland config
-monitor=,preferred,auto,auto
+    // 1. hyprland.conf (Main Loader)
+    let hypr_main = r#"
+# slate-desktop: modular hyprland config
+source = ~/.config/hypr/monitors.conf
+source = ~/.config/hypr/autostart.conf
+source = ~/.config/hypr/input.conf
+source = ~/.config/hypr/appearance.conf
+source = ~/.config/hypr/animations.conf
+source = ~/.config/hypr/keybinds.conf
+source = ~/.config/hypr/windowrules.conf
 
+$terminal = kitty
+$browser = firefox
+"#;
+    fs::write(format!("{}/hyprland.conf", hypr_dir), hypr_main)?;
+
+    // 2. monitors.conf
+    let hypr_monitors = r#"
+# Displays
+monitor=,preferred,auto,auto
+"#;
+    fs::write(format!("{}/monitors.conf", hypr_dir), hypr_monitors)?;
+
+    // 3. autostart.conf
+    let hypr_autostart = r#"
 # Security: start hyprlock immediately
 exec-once = hyprlock
 
 # Core Services
 exec-once = clipse -listen
+"#;
+    fs::write(format!("{}/autostart.conf", hypr_dir), hypr_autostart)?;
 
-$terminal = kitty
-$browser = firefox
-
+    // 4. input.conf
+    let hypr_input = format!(r#"
 input {{
     kb_layout = {}
     follow_mouse = 1
+    touchpad {{
+        natural_scroll = yes
+    }}
 }}
+"#, config.keymap);
+    fs::write(format!("{}/input.conf", hypr_dir), hypr_input)?;
 
-general {{
+    // 5. appearance.conf
+    let hypr_appearance = r#"
+general {
     gaps_in = 5
     gaps_out = 10
     border_size = 2
     col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
     col.inactive_border = rgba(595959aa)
     layout = dwindle
-}}
+}
 
-decoration {{
+decoration {
     rounding = 10
-    blur {{
+    blur {
         enabled = true
-        size = 3
-        passes = 1
-    }}
-}}
+        size = 8
+        passes = 2
+        new_optimizations = on
+    }
+    drop_shadow = yes
+    shadow_range = 10
+    shadow_render_power = 3
+    col.shadow = rgba(1a1a1aee)
+}
+"#;
+    fs::write(format!("{}/appearance.conf", hypr_dir), hypr_appearance)?;
 
-animations {{
+    // 6. animations.conf
+    let hypr_animations = r#"
+animations {
     enabled = true
     bezier = myBezier, 0.05, 0.9, 0.1, 1.05
     animation = windows, 1, 7, myBezier
@@ -250,23 +288,76 @@ animations {{
     animation = border, 1, 10, default
     animation = fade, 1, 7, default
     animation = workspaces, 1, 6, default
-}}
+}
+"#;
+    fs::write(format!("{}/animations.conf", hypr_dir), hypr_animations)?;
 
+    // 7. keybinds.conf
+    let hypr_keybinds = r#"
+# Core Binds
 bind = SUPER, Return, exec, $terminal
 bind = SUPER, B, exec, $browser
 bind = SUPER, Q, killactive,
 bind = SUPER, M, exit,
 bind = SUPER, F, togglefloating,
 bind = SUPER, Space, exec, wofi --show drun
-bind = SUPER, V, exec, kitty -e clipse
+bind = SUPER, V, exec, kitty --title clipse -e clipse
+
+# Window Focus
+bind = SUPER, left, movefocus, l
+bind = SUPER, right, movefocus, r
+bind = SUPER, up, movefocus, u
+bind = SUPER, down, movefocus, d
+
+# Workspaces
+bind = SUPER, 1, workspace, 1
+bind = SUPER, 2, workspace, 2
+bind = SUPER, 3, workspace, 3
+bind = SUPER, 4, workspace, 4
+bind = SUPER, 5, workspace, 5
+bind = SUPER, 6, workspace, 6
+
+bind = SUPER SHIFT, 1, movetoworkspace, 1
+bind = SUPER SHIFT, 2, movetoworkspace, 2
+bind = SUPER SHIFT, 3, movetoworkspace, 3
+bind = SUPER SHIFT, 4, movetoworkspace, 4
 
 # Mouse bindings
 bindm = SUPER, mouse:272, movewindow
 bindm = SUPER, mouse:273, resizewindow
-"#, config.keymap);
+"#;
+    fs::write(format!("{}/keybinds.conf", hypr_dir), hypr_keybinds)?;
 
-    fs::write(format!("{}/hyprland.conf", hypr_dir), hypr_conf)?;
-    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
+    // 8. windowrules.conf
+    let hypr_windowrules = r#"
+# Floating Dialogs
+windowrule = float, file_progress
+windowrule = float, confirm
+windowrule = float, dialog
+windowrule = float, download
+windowrule = float, notification
+windowrule = float, error
+windowrule = float, splash
+windowrule = float, confirmreset
+windowrule = float, title:Open File
+windowrule = float, title:branchdialog
+windowrule = float, Lxappearance
+windowrule = float, pavucontrol-qt
+windowrule = float, pavucontrol
+windowrule = float, file-roller
+windowrule = float, title:wlogout
+
+# Opacity Rules
+windowrulev2 = opacity 0.9 0.9,class:^(kitty)$
+windowrulev2 = opacity 0.95 0.9,class:^(firefox)$
+
+# Clipse Floating setup (requires title param in bind)
+windowrulev2 = float,class:(kitty),title:(clipse)
+windowrulev2 = size 800 600,class:(kitty),title:(clipse)
+"#;
+    fs::write(format!("{}/windowrules.conf", hypr_dir), hypr_windowrules)?;
+
+    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &hypr_dir])?;
 
     Ok(())
 }
