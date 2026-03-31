@@ -366,8 +366,8 @@ windowrulev2 = size 800 600,class:(kitty),title:(clipse)
 }
 
 fn configure_tools(config: &UserInfo) -> Result<()> {
-    println!("[Phase 2/3] Ax user packages");
-    println!("  > Finalizing Tools (Ax, Git, VSCode, Clipse)...");
+    println!("[Phase 2/3] package setup");
+    println!("  > Finalizing Tools (pacman stage)...");
 
     // Git Config
     if !config.git_name.is_empty() {
@@ -435,49 +435,25 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "adw-gtk-theme",
     ];
 
-    let mut aur_packages = vec!["visual-studio-code-bin", "clipse"];
+    let mut install_pkgs: Vec<&str> = repo_packages.to_vec();
+    if config.shell_ui == Some("caelestia".to_string()) {
+        install_pkgs.push("fish");
+        install_pkgs.push("wget");
+    }
 
-    let mut pkg_vec = repo_packages.to_vec();
-    pkg_vec.extend(aur_packages.iter().copied());
+    let mut pacman_args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
+    pacman_args.extend(install_pkgs.iter().copied());
+    run_command("pacman", &pacman_args)?;
+
+    let mut skipped = vec!["visual-studio-code-bin", "clipse"];
     if config.shell_ui.is_some() {
-        pkg_vec.push("quickshell-git");
-        aur_packages.push("quickshell-git");
-        if config.shell_ui == Some("caelestia".to_string()) {
-            pkg_vec.push("fish");
-            pkg_vec.push("wget");
-        }
+        skipped.push("quickshell-git");
     }
-
-    let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
-    let sudoers_content = format!("{} ALL=(ALL:ALL) NOPASSWD: ALL\n", config.username);
-    fs::write(&sudoers_dropin, sudoers_content)?;
-    run_command("chmod", &["0440", &sudoers_dropin])?;
-
-    // Force non-interactive sudo behavior in the spawned user shell.
-    // This avoids hanging on password prompts when running under arch-chroot.
-    let ax_cmd = format!("SUDO_ASKPASS=/bin/false ax -S {} --noconfirm", pkg_vec.join(" "));
-    let install_res = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
-
-    let _ = fs::remove_file(&sudoers_dropin);
-    if let Err(err) = install_res {
-        println!("  ! Ax failed: {}", err);
-        println!("  ! Falling back to pacman for official packages...");
-
-        let mut fallback_pkgs: Vec<&str> = repo_packages.to_vec();
-        if config.shell_ui == Some("caelestia".to_string()) {
-            fallback_pkgs.push("fish");
-            fallback_pkgs.push("wget");
-        }
-
-        let mut pacman_args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
-        pacman_args.extend(fallback_pkgs.iter().copied());
-        run_command("pacman", &pacman_args)?;
-
-        println!(
-            "  ! Skipped AUR packages due non-interactive chroot: {}",
-            aur_packages.join(", ")
-        );
-    }
+    println!(
+        "  ! AUR packages skipped during installer stage: {}",
+        skipped.join(", ")
+    );
+    println!("  ! Install these later after first boot using your preferred AUR helper.");
 
     Ok(())
 }

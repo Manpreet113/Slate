@@ -547,6 +547,7 @@ fn help_text_for_state(state: &AppState) -> &'static str {
 fn ui(f: &mut Frame, app: &mut App) {
     let theme = UiTheme::default();
     let size = f.area();
+    f.render_widget(Clear, size);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
