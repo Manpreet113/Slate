@@ -380,9 +380,9 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         run_command("chown", &[&format!("{}:{}", config.username, config.username), &format!("{}/.gitconfig", user_home)])?;
     }
 
-    // AUR Packages via Ax
-    println!("  > Installing desktop/tooling packages via Ax as user...");
-    let packages = [
+    // Split official repo packages from AUR-only packages so we can gracefully
+    // fallback to pacman when Ax cannot run non-interactively in chroot.
+    let repo_packages = [
         // Desktop/session
         "hyprland",
         "hyprlock",
@@ -433,13 +433,15 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "ttf-nerd-fonts-symbols",
         "gpu-screen-recorder",
         "adw-gtk-theme",
-        "visual-studio-code-bin",
-        "clipse",
     ];
 
-    let mut pkg_vec = packages.to_vec();
+    let mut aur_packages = vec!["visual-studio-code-bin", "clipse"];
+
+    let mut pkg_vec = repo_packages.to_vec();
+    pkg_vec.extend(aur_packages.iter().copied());
     if config.shell_ui.is_some() {
         pkg_vec.push("quickshell-git");
+        aur_packages.push("quickshell-git");
         if config.shell_ui == Some("caelestia".to_string()) {
             pkg_vec.push("fish");
             pkg_vec.push("wget");
@@ -457,7 +459,25 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     let install_res = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
 
     let _ = fs::remove_file(&sudoers_dropin);
-    install_res?;
+    if let Err(err) = install_res {
+        println!("  ! Ax failed: {}", err);
+        println!("  ! Falling back to pacman for official packages...");
+
+        let mut fallback_pkgs: Vec<&str> = repo_packages.to_vec();
+        if config.shell_ui == Some("caelestia".to_string()) {
+            fallback_pkgs.push("fish");
+            fallback_pkgs.push("wget");
+        }
+
+        let mut pacman_args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
+        pacman_args.extend(fallback_pkgs.iter().copied());
+        run_command("pacman", &pacman_args)?;
+
+        println!(
+            "  ! Skipped AUR packages due non-interactive chroot: {}",
+            aur_packages.join(", ")
+        );
+    }
 
     Ok(())
 }

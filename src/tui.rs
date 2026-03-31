@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Gauge, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
     prelude::Stylize,
 };
@@ -579,6 +579,10 @@ fn ui(f: &mut Frame, app: &mut App) {
         .gauge_style(Style::default().fg(theme.accent));
     f.render_widget(step, header_chunks[1]);
 
+    // Clear body area every frame to avoid stale glyph artifacts when switching
+    // between states with very different layouts.
+    f.render_widget(Clear, chunks[1]);
+
     match &app.state {
         AppState::Welcome => {
             let p = Paragraph::new("Welcome to Slate!\n\nThis will install an opinionated Arch/Hyprland Desktop.\n\nPress Enter to begin.")
@@ -852,7 +856,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             
             if app.state == AppState::Finished {
                 let overlay = Rect::new(size.width / 4, size.height / 3, size.width / 2, size.height / 3);
-                f.render_widget(ratatui::widgets::Clear, overlay);
+                f.render_widget(Clear, overlay);
                 let p = Paragraph::new("\nSUCCESS\n\nInstallation Finished.\nYou can now reboot.\n\nPress Enter or 'q' to exit.")
                     .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.success)).title("Done".fg(theme.success).bold()))
                     .alignment(ratatui::layout::Alignment::Center);
