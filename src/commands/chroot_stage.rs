@@ -22,6 +22,9 @@ pub fn chroot_stage() -> Result<()> {
     // 4. Desktop Environment (Direct Boot & Hyprland)
     configure_desktop(&user_info)?;
 
+    // 4.5 Shell UI (Quickshell-based)
+    configure_shell_ui(&user_info)?;
+
     // 5. Tooling (Ax, VSCode, Clipse, Git)
     configure_tools(&user_info)?;
 
@@ -434,12 +437,21 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "clipse",
     ];
 
+    let mut pkg_vec = packages.to_vec();
+    if config.shell_ui.is_some() {
+        pkg_vec.push("quickshell-git");
+        if config.shell_ui == Some("caelestia".to_string()) {
+            pkg_vec.push("fish");
+            pkg_vec.push("wget");
+        }
+    }
+
     let sudoers_dropin = format!("/etc/sudoers.d/90-slate-ax-{}", config.username);
     let sudoers_content = format!("{} ALL=(ALL:ALL) NOPASSWD: ALL\n", config.username);
     fs::write(&sudoers_dropin, sudoers_content)?;
     run_command("chmod", &["0440", &sudoers_dropin])?;
 
-    let ax_cmd = format!("ax -S {} --noconfirm", packages.join(" "));
+    let ax_cmd = format!("ax -S {} --noconfirm", pkg_vec.join(" "));
     let install_res = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
 
     let _ = fs::remove_file(&sudoers_dropin);
@@ -515,5 +527,53 @@ fn run_command_stdin(cmd: &str, args: &[&str], input: &str) -> Result<()> {
         }
         bail!("Command {} failed: {}", cmd, stderr);
     }
+    Ok(())
+}
+
+fn configure_shell_ui(config: &UserInfo) -> Result<()> {
+    let ui_name = match &config.shell_ui {
+        Some(name) => name,
+        None => return Ok(()),
+    };
+
+    println!("  > Installing Shell UI: {}...", ui_name);
+    let user_home = format!("/home/{}", config.username);
+
+    match ui_name.as_str() {
+        "ambxst" => {
+            println!("    $ curl -L get.axeni.de/ambxst | sh");
+            let cmd = "curl -L get.axeni.de/ambxst | sh";
+            run_command("su", &["-", &config.username, "-c", cmd])?;
+
+            // Update Hyprland autostart.conf
+            let autostart_path = format!("{}/.config/hypr/autostart.conf", user_home);
+            if Path::new(&autostart_path).exists() {
+                let mut content = fs::read_to_string(&autostart_path)?;
+                content.push_str("\n# Shell UI: Ambxst\nexec-once = ambxst\n");
+                fs::write(&autostart_path, content)?;
+            }
+        }
+        "caelestia" => {
+            // Change shell to fish
+            run_command("chsh", &["-s", "/usr/bin/fish", &config.username])?;
+
+            // Clone and run install script
+            let target_dir = format!("{}/.local/share/caelestia", user_home);
+            fs::create_dir_all(&target_dir)?;
+            run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &format!("{}/.local", user_home)])?;
+
+            run_command("su", &["-", &config.username, "-c", "git clone https://github.com/caelestia-dots/caelestia.git ~/.local/share/caelestia"])?;
+            run_command("su", &["-", &config.username, "-c", "fish ~/.local/share/caelestia/install.fish"])?;
+        }
+        "dank-material" => {
+            println!("    $ curl -fsSL https://install.danklinux.com | sh");
+            let cmd = "curl -fsSL https://install.danklinux.com | sh";
+            run_command("su", &["-", &config.username, "-c", cmd])?;
+        }
+        _ => {}
+    }
+
+    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
+
     Ok(())
 }
