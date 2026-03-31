@@ -451,7 +451,9 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
     fs::write(&sudoers_dropin, sudoers_content)?;
     run_command("chmod", &["0440", &sudoers_dropin])?;
 
-    let ax_cmd = format!("ax -S {} --noconfirm", pkg_vec.join(" "));
+    // Force non-interactive sudo behavior in the spawned user shell.
+    // This avoids hanging on password prompts when running under arch-chroot.
+    let ax_cmd = format!("SUDO_ASKPASS=/bin/false ax -S {} --noconfirm", pkg_vec.join(" "));
     let install_res = run_command("su", &["-", &config.username, "-c", &ax_cmd]);
 
     let _ = fs::remove_file(&sudoers_dropin);
@@ -498,7 +500,8 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
         .context(format!("Failed to run {}", cmd))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = sanitize_for_tui(&String::from_utf8_lossy(&output.stderr));
+        let stderr = stderr.trim().to_string();
         if stderr.is_empty() {
             bail!("Command failed: {}", cmd);
         }
@@ -521,13 +524,53 @@ fn run_command_stdin(cmd: &str, args: &[&str], input: &str) -> Result<()> {
 
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = sanitize_for_tui(&String::from_utf8_lossy(&output.stderr));
+        let stderr = stderr.trim().to_string();
         if stderr.is_empty() {
             bail!("Command {} failed", cmd);
         }
         bail!("Command {} failed: {}", cmd, stderr);
     }
     Ok(())
+}
+
+fn sanitize_for_tui(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        // Strip ANSI escape sequences (CSI and a few common OSC forms).
+        if ch == '\u{1b}' {
+            if let Some('[') = chars.peek().copied() {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if let Some(']') = chars.peek().copied() {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            continue;
+        }
+
+        // Drop control chars that can break layout, keep tabs/spaces.
+        if ch == '\r' || (ch.is_control() && ch != '\n' && ch != '\t') {
+            continue;
+        }
+
+        out.push(ch);
+    }
+
+    out
 }
 
 fn configure_shell_ui(config: &UserInfo) -> Result<()> {

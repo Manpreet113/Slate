@@ -72,7 +72,8 @@ fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Se
     })();
 
     if let Err(e) = res {
-        let _ = tx.send(InstallMsg::Error(format!("{:?}", e)));
+        let msg = sanitize_for_tui(&format!("{:#}", e));
+        let _ = tx.send(InstallMsg::Error(msg));
     }
 }
 
@@ -200,7 +201,10 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             if let Ok(l) = line {
-                let _ = tx_out.send(InstallMsg::Log(l));
+                let clean = sanitize_for_tui(&l);
+                if !clean.is_empty() {
+                    let _ = tx_out.send(InstallMsg::Log(clean));
+                }
             }
         }
     });
@@ -209,14 +213,18 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             if let Ok(l) = line {
+                let clean = sanitize_for_tui(&l);
+                if clean.is_empty() {
+                    continue;
+                }
                 if let Ok(mut captured) = stderr_lines_for_thread.lock() {
-                    captured.push(l.clone());
+                    captured.push(clean.clone());
                     if captured.len() > 200 {
                         let drop_n = captured.len() - 200;
                         captured.drain(0..drop_n);
                     }
                 }
-                let _ = tx_err.send(InstallMsg::Log(format!("[Err] {}", l)));
+                let _ = tx_err.send(InstallMsg::Log(format!("[Err] {}", clean)));
             }
         }
     });
@@ -248,6 +256,43 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
         );
     }
     Ok(())
+}
+
+fn sanitize_for_tui(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if let Some('[') = chars.peek().copied() {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if let Some(']') = chars.peek().copied() {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            continue;
+        }
+
+        if ch == '\r' || (ch.is_control() && ch != '\n' && ch != '\t') {
+            continue;
+        }
+
+        out.push(ch);
+    }
+
+    out
 }
 
 struct MountGuard<'a> {

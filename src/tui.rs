@@ -176,7 +176,7 @@ impl App {
     }
 
     fn max_log_scroll(&self) -> usize {
-        self.logs.len().saturating_sub(INSTALL_LOG_WINDOW)
+        self.logs.len().saturating_sub(1)
     }
 
     fn scroll_logs_up(&mut self, amount: usize) {
@@ -195,8 +195,6 @@ impl App {
         self.log_scroll = 0;
     }
 }
-
-const INSTALL_LOG_WINDOW: usize = 30;
 
 pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
 where
@@ -815,8 +813,10 @@ fn ui(f: &mut Frame, app: &mut App) {
                 });
             f.render_widget(gauge, install_chunks[0]);
             
+            let view_height = install_chunks[1].height.saturating_sub(2) as usize;
+            let log_window = view_height.max(1);
             let end = app.logs.len().saturating_sub(app.log_scroll);
-            let start = end.saturating_sub(INSTALL_LOG_WINDOW);
+            let start = end.saturating_sub(log_window);
             let visible_logs = &app.logs[start..end];
 
             let log_lines: Vec<Line> = visible_logs
@@ -860,13 +860,32 @@ fn ui(f: &mut Frame, app: &mut App) {
             }
         }
         AppState::Error(e) => {
-            let p = Paragraph::new(format!("ERROR: {}\n\nPress Enter to exit.", e)).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.error))
-                    .title("Installer Error".fg(theme.error).bold())
-            );
-            f.render_widget(p, chunks[1]);
+            let err_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(4), Constraint::Min(5)])
+                .split(chunks[1]);
+
+            let summary = Paragraph::new("Installer failed. See details below and press Enter to exit.")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.error))
+                        .title("Installer Error".fg(theme.error).bold())
+                )
+                .wrap(Wrap { trim: true })
+                .style(Style::default().fg(theme.error).add_modifier(Modifier::BOLD));
+            f.render_widget(summary, err_chunks[0]);
+
+            let detail = Paragraph::new(e.as_str())
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border))
+                        .title("Details".fg(theme.accent).bold())
+                )
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(theme.muted));
+            f.render_widget(detail, err_chunks[1]);
         }
     }
 
