@@ -28,7 +28,6 @@ pub struct UserInfo {
     pub timezone: String,
     pub git_name: String,
     pub git_email: String,
-    pub shell_ui: Option<String>,
 }
 
 impl Default for UserInfo {
@@ -41,7 +40,6 @@ impl Default for UserInfo {
             timezone: "UTC".to_string(),
             git_name: String::new(),
             git_email: String::new(),
-            shell_ui: None,
         }
     }
 }
@@ -64,7 +62,6 @@ pub enum AppState {
     UserSetupPassword,
     UserSetupGitName,
     UserSetupGitEmail,
-    UserSetupShellUi,
     Confirmation,
     Installing,
     Finished,
@@ -80,7 +77,6 @@ pub struct App {
     pub input: String,
     pub keymaps: Vec<String>,
     pub timezones: Vec<String>,
-    pub shell_uis: Vec<String>,
     pub filtered_items: Vec<String>,
     pub logs: Vec<String>,
     pub log_scroll: usize,
@@ -95,13 +91,6 @@ impl App {
             list_state.select(Some(0));
         }
 
-        let shell_uis = vec![
-            "None (Slate Default)".to_string(),
-            "Ambxst (Modular Wayland Shell)".to_string(),
-            "Caelestia (Aesthetic Quickshell)".to_string(),
-            "Dank Material (Material You Shell)".to_string(),
-        ];
-
         Self {
             state: AppState::Welcome,
             devices,
@@ -111,7 +100,6 @@ impl App {
             input: String::new(),
             keymaps,
             timezones,
-            shell_uis,
             filtered_items: Vec::new(),
             logs: vec!["[System] App Initialized".to_string()],
             log_scroll: 0,
@@ -145,7 +133,6 @@ impl App {
         let len = match self.state {
             AppState::SelectingDisk => self.devices.len(),
             AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
-            AppState::UserSetupShellUi => self.shell_uis.len(),
             _ => 0,
         };
 
@@ -162,7 +149,6 @@ impl App {
         let len = match self.state {
             AppState::SelectingDisk => self.devices.len(),
             AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
-            AppState::UserSetupShellUi => self.shell_uis.len(),
             _ => 0,
         };
 
@@ -371,30 +357,11 @@ where
                     AppState::UserSetupGitEmail => match key.code {
                         KeyCode::Enter => {
                             app.user_info.git_email = app.input.drain(..).collect();
-                            app.state = AppState::UserSetupShellUi;
-                            app.list_state.select(Some(0));
+                            app.state = AppState::Confirmation;
                         }
                         KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
                         KeyCode::Esc => app.state = AppState::UserSetupGitName,
-                        _ => {}
-                    },
-                    AppState::UserSetupShellUi => match key.code {
-                        KeyCode::Enter => {
-                            if let Some(i) = app.list_state.selected() {
-                                let ui_choice = match i {
-                                    1 => Some("ambxst".to_string()),
-                                    2 => Some("caelestia".to_string()),
-                                    3 => Some("dank-material".to_string()),
-                                    _ => None,
-                                };
-                                app.user_info.shell_ui = ui_choice;
-                                app.state = AppState::Confirmation;
-                            }
-                        }
-                        KeyCode::Down => app.next_item(),
-                        KeyCode::Up => app.previous_item(),
-                        KeyCode::Esc => app.state = AppState::UserSetupGitEmail,
                         _ => {}
                     },
                     AppState::Confirmation => match key.code {
@@ -496,7 +463,7 @@ impl Default for UiTheme {
 }
 
 fn current_step(state: &AppState) -> (&'static str, u16, u16) {
-    let total = 9;
+    let total = 8;
     match state {
         AppState::Welcome | AppState::UserSetupKeymap => ("Keymap", 1, total),
         AppState::SelectingDisk => ("Disk", 2, total),
@@ -504,9 +471,8 @@ fn current_step(state: &AppState) -> (&'static str, u16, u16) {
         AppState::UserSetupHostname => ("Hostname", 4, total),
         AppState::UserSetupUsername => ("Username", 5, total),
         AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail => ("Credentials", 6, total),
-        AppState::UserSetupShellUi => ("Shell UI", 7, total),
-        AppState::Confirmation => ("Confirm", 8, total),
-        AppState::Installing | AppState::Finished | AppState::Error(_) => ("Install", 9, total),
+        AppState::Confirmation => ("Confirm", 7, total),
+        AppState::Installing | AppState::Finished | AppState::Error(_) => ("Install", 8, total),
     }
 }
 
@@ -530,7 +496,7 @@ fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
 fn help_text_for_state(state: &AppState) -> &'static str {
     match state {
         AppState::Welcome => "Enter: Begin | q: Quit",
-        AppState::SelectingDisk | AppState::UserSetupKeymap | AppState::UserSetupTimezone | AppState::UserSetupShellUi => {
+        AppState::SelectingDisk | AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
             "Up/Down: Move | Enter: Select | Esc: Back | q: Quit"
         }
         AppState::UserSetupHostname
@@ -728,19 +694,6 @@ fn ui(f: &mut Frame, app: &mut App) {
             .wrap(Wrap { trim: true });
             f.render_widget(status_panel, sub_chunks[1]);
         }
-        AppState::UserSetupShellUi => {
-            let items: Vec<ListItem> = app.shell_uis.iter().map(|i| ListItem::new(i.as_str())).collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title("Select Shell UI (Quickshell-based)".fg(theme.accent).bold())
-                )
-                .highlight_symbol("▶ ")
-                .highlight_style(Style::default().fg(theme.accent).bg(theme.selection_bg).add_modifier(Modifier::BOLD));
-            f.render_stateful_widget(list, chunks[1], &mut app.list_state);
-        }
         AppState::Confirmation => {
              let panel = Block::default()
                  .borders(Borders::ALL)
@@ -762,7 +715,6 @@ fn ui(f: &mut Frame, app: &mut App) {
                  Line::from(Span::styled("User", Style::default().fg(theme.muted))),
                  Line::from(""),
                  Line::from(Span::styled("Desktop", Style::default().fg(theme.muted))),
-                 Line::from(Span::styled("Shell UI", Style::default().fg(theme.muted))),
                  Line::from(Span::styled("Git Config", Style::default().fg(theme.muted))),
                  Line::from(""),
                  Line::from(Span::styled("Action", Style::default().fg(theme.muted))),
@@ -780,7 +732,6 @@ fn ui(f: &mut Frame, app: &mut App) {
                  format!("{} <{}>", app.user_info.git_name, app.user_info.git_email)
              };
 
-             let shell_ui_value = app.user_info.shell_ui.as_deref().unwrap_or("None (Slate Default)");
              let values = Paragraph::new(vec![
                  Line::from(Span::styled(disk_value, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))),
                  Line::from(Span::raw(app.user_info.keymap.clone())),
@@ -789,7 +740,6 @@ fn ui(f: &mut Frame, app: &mut App) {
                  Line::from(Span::raw(app.user_info.username.clone())),
                  Line::from(""),
                  Line::from(Span::raw("Hyprland + Zsh + Modern CLI Extras")),
-                 Line::from(Span::raw(shell_ui_value)),
                  Line::from(Span::raw(git_value)),
                  Line::from(""),
                  Line::from(Span::styled("Press Enter to CONFIRM and INSTALL", Style::default().fg(theme.accent_soft).add_modifier(Modifier::BOLD))),

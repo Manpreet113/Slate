@@ -22,9 +22,6 @@ pub fn chroot_stage() -> Result<()> {
     // 4. Desktop Environment (Direct Boot & Hyprland)
     configure_desktop(&user_info)?;
 
-    // 4.5 Shell UI (Quickshell-based)
-    configure_shell_ui(&user_info)?;
-
     // 5. Tooling (Ax, VSCode, Clipse, Git)
     configure_tools(&user_info)?;
 
@@ -239,6 +236,10 @@ exec-once = hyprlock
 
 # Core Services
 exec-once = clipse -listen
+
+# Shell (Quickshell)
+exec-once = swww-daemon
+exec-once = qs -p ~/.config/shell/shell.qml
 "#;
     fs::write(format!("{}/autostart.conf", hypr_dir), hypr_autostart)?;
 
@@ -299,18 +300,38 @@ animations {
     let hypr_keybinds = r#"
 # Core Binds
 bind = SUPER, Return, exec, $terminal
-bind = SUPER, B, exec, $browser
-bind = SUPER, Q, killactive,
-bind = SUPER, M, exit,
-bind = SUPER, F, togglefloating,
-bind = SUPER, Space, exec, wofi --show drun
-bind = SUPER, V, exec, kitty --title clipse -e clipse
+bind = SUPER, T,      exec, $terminal
+bind = SUPER, B,      exec, $browser
+bind = SUPER, Q,      killactive,
+bind = SUPER, M,      exit,
+bind = SUPER, V,      togglefloating,
+bind = SUPER, F,      fullscreen, 0
+bind = SUPER SHIFT, F, fullscreen, 1
 
-# Window Focus
-bind = SUPER, left, movefocus, l
+# Launcher (Quickshell IPC)
+bind = SUPER, Space, exec, qs ipc call shell toggleLauncher
+
+# Wallpaper picker
+bind = SUPER, W, exec, ~/.config/shell/scripts/wallpaper.sh
+
+# Clipboard manager
+bind = SUPER SHIFT, V, exec, kitty --title clipse -e clipse
+
+# Window Focus (vim + arrows)
+bind = SUPER, H, movefocus, l
+bind = SUPER, L, movefocus, r
+bind = SUPER, K, movefocus, u
+bind = SUPER, J, movefocus, d
+bind = SUPER, left,  movefocus, l
 bind = SUPER, right, movefocus, r
-bind = SUPER, up, movefocus, u
-bind = SUPER, down, movefocus, d
+bind = SUPER, up,    movefocus, u
+bind = SUPER, down,  movefocus, d
+
+# Move windows
+bind = SUPER SHIFT, H, movewindow, l
+bind = SUPER SHIFT, L, movewindow, r
+bind = SUPER SHIFT, K, movewindow, u
+bind = SUPER SHIFT, J, movewindow, d
 
 # Workspaces
 bind = SUPER, 1, workspace, 1
@@ -324,6 +345,7 @@ bind = SUPER SHIFT, 1, movetoworkspace, 1
 bind = SUPER SHIFT, 2, movetoworkspace, 2
 bind = SUPER SHIFT, 3, movetoworkspace, 3
 bind = SUPER SHIFT, 4, movetoworkspace, 4
+bind = SUPER SHIFT, 5, movetoworkspace, 5
 
 # Mouse bindings
 bindm = SUPER, mouse:272, movewindow
@@ -361,6 +383,9 @@ windowrulev2 = size 800 600,class:(kitty),title:(clipse)
     fs::write(format!("{}/windowrules.conf", hypr_dir), hypr_windowrules)?;
 
     run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &hypr_dir])?;
+
+    // Install shell config (Quickshell-based)
+    install_shell_config(config, &user_home)?;
 
     Ok(())
 }
@@ -433,22 +458,19 @@ fn configure_tools(config: &UserInfo) -> Result<()> {
         "ttf-nerd-fonts-symbols",
         "gpu-screen-recorder",
         "adw-gtk-theme",
+        // Shell (Quickshell)
+        "quickshell",
+        "matugen",
+        "swww",
+        "python",
+        "python-gobject",
     ];
 
-    let mut install_pkgs: Vec<&str> = repo_packages.to_vec();
-    if config.shell_ui == Some("caelestia".to_string()) {
-        install_pkgs.push("fish");
-        install_pkgs.push("wget");
-    }
-
     let mut pacman_args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
-    pacman_args.extend(install_pkgs.iter().copied());
+    pacman_args.extend(repo_packages.iter().copied());
     run_command("pacman", &pacman_args)?;
 
-    let mut skipped = vec!["visual-studio-code-bin", "clipse"];
-    if config.shell_ui.is_some() {
-        skipped.push("quickshell-git");
-    }
+    let skipped = vec!["visual-studio-code-bin", "clipse"];
     println!(
         "  ! AUR packages skipped during installer stage: {}",
         skipped.join(", ")
@@ -569,50 +591,49 @@ fn sanitize_for_tui(input: &str) -> String {
     out
 }
 
-fn configure_shell_ui(config: &UserInfo) -> Result<()> {
-    let ui_name = match &config.shell_ui {
-        Some(name) => name,
-        None => return Ok(()),
-    };
+fn install_shell_config(config: &UserInfo, user_home: &str) -> Result<()> {
+    println!("  > Installing Quickshell shell config...");
 
-    println!("  > Installing Shell UI: {}...", ui_name);
-    let user_home = format!("/home/{}", config.username);
+    let shell_dst = format!("{}/.config/shell", user_home);
+    fs::create_dir_all(&shell_dst)?;
 
-    match ui_name.as_str() {
-        "ambxst" => {
-            println!("    $ curl -L get.axeni.de/ambxst | sh");
-            let cmd = "curl -L get.axeni.de/ambxst | sh";
-            run_command("su", &["-", &config.username, "-c", cmd])?;
+    // Clone the shell repository from the user's GitHub.
+    // The repo is expected to be at: https://github.com/manpreet113/shell
+    // If unavailable at install time, the user can re-run after first boot.
+    let clone_result = run_command(
+        "git",
+        &[
+            "clone",
+            "--depth=1",
+            "https://github.com/manpreet113/shell.git",
+            &shell_dst,
+        ],
+    );
 
-            // Update Hyprland autostart.conf
-            let autostart_path = format!("{}/.config/hypr/autostart.conf", user_home);
-            if Path::new(&autostart_path).exists() {
-                let mut content = fs::read_to_string(&autostart_path)?;
-                content.push_str("\n# Shell UI: Ambxst\nexec-once = ambxst\n");
-                fs::write(&autostart_path, content)?;
-            }
+    if let Err(e) = clone_result {
+        println!("  ! Shell clone failed ({}). Skipping — install manually after first boot.", e);
+        println!("  !   git clone https://github.com/manpreet113/shell.git ~/.config/shell");
+    } else {
+        // Make wallpaper script executable
+        let wallpaper_script = format!("{}/scripts/wallpaper.sh", shell_dst);
+        if Path::new(&wallpaper_script).exists() {
+            run_command("chmod", &["+x", &wallpaper_script])?;
         }
-        "caelestia" => {
-            // Change shell to fish
-            run_command("chsh", &["-s", "/usr/bin/fish", &config.username])?;
 
-            // Clone and run install script
-            let target_dir = format!("{}/.local/share/caelestia", user_home);
-            fs::create_dir_all(&target_dir)?;
-            run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &format!("{}/.local", user_home)])?;
+        // Create the colors directory so Matugen has somewhere to write
+        fs::create_dir_all(format!("{}/.config/shell", user_home))?;
 
-            run_command("su", &["-", &config.username, "-c", "git clone https://github.com/caelestia-dots/caelestia.git ~/.local/share/caelestia"])?;
-            run_command("su", &["-", &config.username, "-c", "fish ~/.local/share/caelestia/install.fish"])?;
-        }
-        "dank-material" => {
-            println!("    $ curl -fsSL https://install.danklinux.com | sh");
-            let cmd = "curl -fsSL https://install.danklinux.com | sh";
-            run_command("su", &["-", &config.username, "-c", cmd])?;
-        }
-        _ => {}
+        run_command(
+            "chown",
+            &[
+                "-R",
+                &format!("{}:{}", config.username, config.username),
+                &shell_dst,
+            ],
+        )?;
+
+        println!("  > Shell config installed at ~/.config/shell");
     }
-
-    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
 
     Ok(())
 }
