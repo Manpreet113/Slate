@@ -1461,6 +1461,8 @@ fn copy_path(src: &Path, dst: &Path) -> Result<()> {
 
 fn slate_shell_packages() -> Vec<&'static str> {
     vec![
+        "base-devel",
+        "git",
         "hyprland",
         "quickshell",
         "hyprlock",
