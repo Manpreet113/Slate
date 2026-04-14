@@ -81,6 +81,16 @@ fn setup_fast_downloads() -> Result<()> {
         }
     }
 
+    if !content.contains("DisableDownloadTimeout") {
+        if let Some(pos) = updated.find("[options]") {
+            if let Some(line_end) = updated[pos..].find('\n') {
+                updated.insert_str(pos + line_end + 1, "DisableDownloadTimeout\n");
+            }
+        } else {
+            updated.push_str("\nDisableDownloadTimeout\n");
+        }
+    }
+
     if updated != content {
         fs::write(pacman_conf, updated)?;
     }

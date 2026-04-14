@@ -419,15 +419,28 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
         "Optimizing Mirrors & Pacman...".to_string(),
     ))?;
 
-    // Enable ParallelDownloads in host if not already enabled
+    // 1. Enable ParallelDownloads & DisableDownloadTimeout in host
     let pacman_conf = "/etc/pacman.conf";
     if Path::new(pacman_conf).exists() {
         let content = fs::read_to_string(pacman_conf)?;
         let mut updated = content.clone();
+        
+        // Parallel Downloads
         if content.contains("#ParallelDownloads") {
             updated = updated.replace("#ParallelDownloads", "ParallelDownloads");
         } else if !content.contains("ParallelDownloads") {
             updated.push_str("\nParallelDownloads = 5\n");
+        }
+
+        // Disable Download Timeout
+        if !content.contains("DisableDownloadTimeout") {
+            if let Some(pos) = updated.find("[options]") {
+                if let Some(line_end) = updated[pos..].find('\n') {
+                    updated.insert_str(pos + line_end + 1, "DisableDownloadTimeout\n");
+                }
+            } else {
+                updated.push_str("\nDisableDownloadTimeout\n");
+            }
         }
         
         if updated != content {
@@ -435,7 +448,14 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
         }
     }
 
-    // Turbo-rank top 10 mirrors with high parallelism and regional focus
+    // 2. Prepend known reliable global mirrors as a safety net
+    let mirrorlist_path = "/etc/pacman.d/mirrorlist";
+    let reliable_mirrors = "## Bulletproof Fallbacks\nServer = https://mirrors.edge.kernel.org/archlinux/$repo/os/$arch\nServer = https://mirror.rackspace.com/archlinux/$repo/os/$arch\nServer = https://mirrors.rit.edu/archlinux/$repo/os/$arch\n\n";
+    
+    let current_mirrors = fs::read_to_string(mirrorlist_path).unwrap_or_default();
+    let _ = fs::write(mirrorlist_path, format!("{}{}", reliable_mirrors, current_mirrors));
+
+    // 3. Turbo-rank top 10 mirrors (excluding the problematic pkgbuild.com)
     run_cmd_captured(
         "reflector",
         &[
@@ -451,11 +471,19 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
             "10",
             "--country",
             "India,Singapore,United States",
+            "--exclude",
+            "pkgbuild.com",
             "--save",
             "/etc/pacman.d/mirrorlist",
         ],
         tx,
     )?;
+
+    // 4. Prepend reliable mirrors AGAIN if reflector overwrote the list
+    let final_mirrors = fs::read_to_string(mirrorlist_path).unwrap_or_default();
+    if !final_mirrors.contains("Bulletproof Fallbacks") {
+        let _ = fs::write(mirrorlist_path, format!("{}{}", reliable_mirrors, final_mirrors));
+    }
 
     Ok(())
 }
