@@ -404,7 +404,6 @@ impl InstallContext {
             "systemd",
             "curl",
             "zsh",
-            "bootctl",
             "intel-ucode",
             "amd-ucode",
         ];
