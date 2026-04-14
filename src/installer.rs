@@ -3,7 +3,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -153,6 +154,16 @@ pub fn run_stage_apply() -> Result<()> {
     let plan = read_plan_from(Path::new("/etc/slate/install-plan.json"))?;
     let mut ctx = ChrootContext::new(plan);
     ctx.execute()
+}
+
+pub fn repair() -> Result<()> {
+    if !nix::unistd::Uid::effective().is_root() {
+        bail!("`slate repair` must be run as root, preferably via sudo");
+    }
+
+    let target = RepairTarget::resolve()?;
+    let mut ctx = RepairContext::new(target)?;
+    ctx.run()
 }
 
 pub fn read_plan_from(path: &Path) -> Result<InstallPlan> {
@@ -926,6 +937,401 @@ impl ChrootContext {
     }
 }
 
+struct RepairTarget {
+    username: String,
+    home: PathBuf,
+    hostname: String,
+    keymap: String,
+    timezone: String,
+    git_name: String,
+    git_email: String,
+}
+
+impl RepairTarget {
+    fn resolve() -> Result<Self> {
+        let username = std::env::var("SUDO_USER")
+            .ok()
+            .filter(|value| !value.trim().is_empty() && value != "root")
+            .or_else(|| {
+                std::env::var("USER")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty() && value != "root")
+            })
+            .ok_or_else(|| anyhow!("Unable to resolve current non-root user"))?;
+
+        let user = nix::unistd::User::from_name(&username)
+            .context("Failed to query target user")?
+            .ok_or_else(|| anyhow!("Target user does not exist: {}", username))?;
+
+        let home = user.dir;
+        let hostname = fs::read_to_string("/etc/hostname")
+            .unwrap_or_else(|_| "slate".to_string())
+            .trim()
+            .to_string();
+        let keymap = detect_keymap().unwrap_or_else(|| "us".to_string());
+        let timezone = detect_timezone().unwrap_or_else(|| "UTC".to_string());
+        let (git_name, git_email) = detect_git_identity(&home).unwrap_or_default();
+
+        Ok(Self {
+            username,
+            home,
+            hostname,
+            keymap,
+            timezone,
+            git_name,
+            git_email,
+        })
+    }
+
+    fn install_plan(&self) -> InstallPlan {
+        InstallPlan {
+            disk: String::new(),
+            hostname: self.hostname.clone(),
+            username: self.username.clone(),
+            password: String::new(),
+            keymap: self.keymap.clone(),
+            timezone: self.timezone.clone(),
+            git_name: self.git_name.clone(),
+            git_email: self.git_email.clone(),
+            desktop_profile: "Slate".to_string(),
+        }
+    }
+}
+
+struct RepairContext {
+    target: RepairTarget,
+    applied: Vec<&'static str>,
+    skipped: Vec<&'static str>,
+    failed: Vec<String>,
+}
+
+impl RepairContext {
+    fn new(target: RepairTarget) -> Result<Self> {
+        Ok(Self {
+            target,
+            applied: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+        })
+    }
+
+    fn run(&mut self) -> Result<()> {
+        println!("Slate repair");
+        println!("Target user: {}", self.target.username);
+        println!("Home: {}", self.target.home.display());
+        println!();
+
+        let packages = self.inspect_packages()?;
+        self.run_group("packages", packages, Self::apply_packages);
+        let shell = self.inspect_shell()?;
+        self.run_group("shell", shell, Self::apply_shell);
+        let user = self.inspect_user()?;
+        self.run_group("user", user, Self::apply_user);
+        let system = self.inspect_system()?;
+        self.run_group("system", system, Self::apply_system);
+        let boot = self.inspect_boot()?;
+        self.run_group("boot", boot, Self::apply_boot);
+
+        println!();
+        println!("Repair summary");
+        println!(
+            "Applied: {}",
+            if self.applied.is_empty() {
+                "none".to_string()
+            } else {
+                self.applied.join(", ")
+            }
+        );
+        println!(
+            "Skipped: {}",
+            if self.skipped.is_empty() {
+                "none".to_string()
+            } else {
+                self.skipped.join(", ")
+            }
+        );
+        println!(
+            "Failed: {}",
+            if self.failed.is_empty() {
+                "none".to_string()
+            } else {
+                self.failed.join(" | ")
+            }
+        );
+
+        if self.failed.is_empty() {
+            Ok(())
+        } else {
+            bail!("One or more repair groups failed")
+        }
+    }
+
+    fn run_group(
+        &mut self,
+        name: &'static str,
+        issues: Vec<String>,
+        apply: fn(&mut Self) -> Result<()>,
+    ) {
+        if issues.is_empty() {
+            println!("[ok] {}: no repair needed", name);
+            return;
+        }
+
+        println!("[plan] {}", name);
+        for issue in &issues {
+            println!("  - {}", issue);
+        }
+        if prompt_yes_no("Apply this group? [y/N] ").unwrap_or(false) {
+            match apply(self) {
+                Ok(()) => {
+                    println!("[done] {}", name);
+                    self.applied.push(name);
+                }
+                Err(err) => {
+                    println!("[fail] {}: {}", name, err);
+                    self.failed.push(format!("{}: {}", name, err));
+                }
+            }
+        } else {
+            println!("[skip] {}", name);
+            self.skipped.push(name);
+        }
+        println!();
+    }
+
+    fn inspect_packages(&self) -> Result<Vec<String>> {
+        let mut issues = Vec::new();
+        self.ensure_shell_source()?;
+        let requirements =
+            parse_requirements_file(&Path::new(SHELL_REPO_DIR).join("requirements.txt"))
+                .context("Failed to inspect shell requirements")?;
+        let packages = merged_package_plan(&requirements);
+        let missing = packages
+            .iter()
+            .filter(|pkg| !package_installed(pkg))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !Path::new("/usr/local/bin/ax").exists() {
+            issues.push("Missing /usr/local/bin/ax".to_string());
+        }
+        if !missing.is_empty() {
+            issues.push(format!(
+                "{} desktop packages missing: {}",
+                missing.len(),
+                preview_list(&missing, 8)
+            ));
+        }
+        Ok(issues)
+    }
+
+    fn inspect_shell(&self) -> Result<Vec<String>> {
+        self.ensure_shell_source()?;
+        let mut issues = Vec::new();
+        let config_src = Path::new(SHELL_REPO_DIR).join(".config");
+        let local_src = Path::new(SHELL_REPO_DIR).join(".local");
+        let config_dst = self.target.home.join(".config");
+        let local_dst = self.target.home.join(".local");
+
+        let config_diff = count_tree_differences(&config_src, &config_dst)?;
+        if config_diff > 0 {
+            issues.push(format!(
+                "Shell config differs from source in {} path(s) and may be overwritten",
+                config_diff
+            ));
+        }
+        if local_src.exists() {
+            let local_diff = count_tree_differences(&local_src, &local_dst)?;
+            if local_diff > 0 {
+                issues.push(format!(
+                    "Shell local assets differ from source in {} path(s) and may be overwritten",
+                    local_diff
+                ));
+            }
+        }
+
+        let input_conf = self.target.home.join(".config/hypr/conf.d/input.conf");
+        if !input_conf.exists() {
+            issues.push("Missing Hyprland input config".to_string());
+        } else {
+            let content = fs::read_to_string(&input_conf).unwrap_or_default();
+            let expected = format!("kb_layout    = {}", self.target.keymap);
+            if !content.contains(&expected) {
+                issues.push(format!(
+                    "Hyprland keymap override is missing or not set to {}",
+                    self.target.keymap
+                ));
+            }
+        }
+        Ok(issues)
+    }
+
+    fn inspect_user(&self) -> Result<Vec<String>> {
+        let mut issues = Vec::new();
+        if !user_in_group(&self.target.username, "wheel")? {
+            issues.push("User is not in wheel group".to_string());
+        }
+        let sudoers = fs::read_to_string("/etc/sudoers").unwrap_or_default();
+        if !sudoers.contains("@includedir /etc/sudoers.d") {
+            issues.push("/etc/sudoers does not include /etc/sudoers.d".to_string());
+        }
+        let sudoers_file = PathBuf::from(format!("/etc/sudoers.d/10-{}", self.target.username));
+        if !sudoers_file.exists() {
+            issues.push(format!("Missing {}", sudoers_file.display()));
+        }
+        for file in [".zprofile", ".zshrc"] {
+            let path = self.target.home.join(file);
+            if !path.exists() {
+                issues.push(format!("Missing {}", path.display()));
+            } else if !owned_by_user(&path, &self.target.username)? {
+                issues.push(format!("Wrong ownership on {}", path.display()));
+            }
+        }
+        Ok(issues)
+    }
+
+    fn inspect_system(&self) -> Result<Vec<String>> {
+        let mut issues = Vec::new();
+        for service in ["NetworkManager", "systemd-timesyncd", "bluetooth"] {
+            if !service_enabled(service) {
+                issues.push(format!("Service {} is not enabled", service));
+            }
+        }
+        let locale = fs::read_to_string("/etc/locale.conf").unwrap_or_default();
+        if !locale.contains("LANG=en_US.UTF-8") {
+            issues.push("Locale is not set to en_US.UTF-8".to_string());
+        }
+        let vconsole = fs::read_to_string("/etc/vconsole.conf").unwrap_or_default();
+        if !vconsole.contains("KEYMAP=") {
+            issues.push("KEYMAP is missing from /etc/vconsole.conf".to_string());
+        }
+        Ok(issues)
+    }
+
+    fn inspect_boot(&self) -> Result<Vec<String>> {
+        let mut issues = Vec::new();
+        if !Path::new("/boot/loader/loader.conf").exists() {
+            issues.push("Missing /boot/loader/loader.conf".to_string());
+        }
+        if !Path::new("/boot/loader/entries/slate.conf").exists() {
+            issues.push("Missing /boot/loader/entries/slate.conf".to_string());
+        }
+        Ok(issues)
+    }
+
+    fn apply_packages(&mut self) -> Result<()> {
+        self.ensure_pacman_keyring()?;
+        self.ensure_shell_source()?;
+        let requirements =
+            parse_requirements_file(&Path::new(SHELL_REPO_DIR).join("requirements.txt"))?;
+        let packages = merged_package_plan(&requirements);
+        let mut args = vec!["-S", "--needed", "--noconfirm"];
+        args.extend(packages.iter().map(String::as_str));
+        run_simple("pacman", &args)?;
+        fetch_ax_binary()?;
+        Ok(())
+    }
+
+    fn apply_shell(&mut self) -> Result<()> {
+        self.ensure_shell_source()?;
+        let config_src = Path::new(SHELL_REPO_DIR).join(".config");
+        let local_src = Path::new(SHELL_REPO_DIR).join(".local");
+        let config_dst = self.target.home.join(".config");
+        let local_dst = self.target.home.join(".local");
+
+        fs::create_dir_all(&config_dst)?;
+        copy_dir_contents(&config_src, &config_dst)?;
+        if local_src.exists() {
+            fs::create_dir_all(&local_dst)?;
+            copy_dir_contents(&local_src, &local_dst)?;
+        }
+        apply_shell_overrides(&self.target.install_plan(), &self.target.home)?;
+        run_simple(
+            "chown",
+            &[
+                "-R",
+                &format!("{}:{}", self.target.username, self.target.username),
+                self.target.home.to_string_lossy().as_ref(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn apply_user(&mut self) -> Result<()> {
+        if !user_in_group(&self.target.username, "wheel")? {
+            run_simple("usermod", &["-aG", "wheel", &self.target.username])?;
+        }
+
+        let sudoers = "/etc/sudoers";
+        let content = fs::read_to_string(sudoers).context("Failed to read sudoers")?;
+        let mut updated = if content.contains("%wheel ALL=(ALL:ALL) ALL") {
+            content
+        } else {
+            content.replace("# %wheel ALL=(ALL:ALL) ALL", "%wheel ALL=(ALL:ALL) ALL")
+        };
+        if !updated.contains("@includedir /etc/sudoers.d")
+            && !updated.contains("#includedir /etc/sudoers.d")
+        {
+            updated.push_str("\n@includedir /etc/sudoers.d\n");
+        } else {
+            updated = updated.replace("#includedir /etc/sudoers.d", "@includedir /etc/sudoers.d");
+        }
+        fs::write(sudoers, updated)?;
+
+        fs::create_dir_all("/etc/sudoers.d")?;
+        let sudoers_file = format!("/etc/sudoers.d/10-{}", self.target.username);
+        fs::write(
+            &sudoers_file,
+            format!("{} ALL=(ALL:ALL) ALL\n", self.target.username),
+        )?;
+        fs::set_permissions(&sudoers_file, fs::Permissions::from_mode(0o440))?;
+
+        write_user_shell_files(&self.target.home)?;
+        run_simple(
+            "chown",
+            &[
+                "-R",
+                &format!("{}:{}", self.target.username, self.target.username),
+                self.target.home.to_string_lossy().as_ref(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn apply_system(&mut self) -> Result<()> {
+        self.ensure_pacman_keyring()?;
+        write_locale_static()?;
+        write_timezone_static(&self.target.timezone)?;
+        fs::write(
+            "/etc/vconsole.conf",
+            format!("KEYMAP={}\n", self.target.keymap),
+        )?;
+        run_simple("systemctl", &["enable", "NetworkManager"])?;
+        run_simple("systemctl", &["enable", "systemd-timesyncd"])?;
+        run_simple("systemctl", &["enable", "bluetooth"])?;
+        Ok(())
+    }
+
+    fn apply_boot(&mut self) -> Result<()> {
+        write_bootloader_files()?;
+        Ok(())
+    }
+
+    fn ensure_shell_source(&self) -> Result<()> {
+        if Path::new(SHELL_REPO_DIR).exists() {
+            return Ok(());
+        }
+        fetch_repo_archive(SHELL_ARCHIVE_URL, Path::new(SHELL_REPO_DIR))
+    }
+
+    fn ensure_pacman_keyring(&self) -> Result<()> {
+        run_simple("pacman-key", &["--init"])?;
+        run_simple("pacman-key", &["--populate", "archlinux"])?;
+        run_simple("pacman", &["-Sy", "--noconfirm", "archlinux-keyring"])?;
+        Ok(())
+    }
+}
+
 fn run_simple(cmd: &str, args: &[&str]) -> Result<()> {
     let output = Command::new(cmd)
         .args(args)
@@ -1189,11 +1595,216 @@ fn set_hypr_keymap(content: &str, keymap: &str) -> String {
     rendered
 }
 
+fn detect_keymap() -> Option<String> {
+    let raw = fs::read_to_string("/etc/vconsole.conf").ok()?;
+    raw.lines().find_map(|line| {
+        line.strip_prefix("KEYMAP=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn detect_timezone() -> Option<String> {
+    let link = fs::read_link("/etc/localtime").ok()?;
+    let full = if link.is_absolute() {
+        link
+    } else {
+        Path::new("/etc").join(link)
+    };
+    full.strip_prefix("/usr/share/zoneinfo")
+        .ok()
+        .map(|value| value.to_string_lossy().trim_start_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn detect_git_identity(home: &Path) -> Option<(String, String)> {
+    let raw = fs::read_to_string(home.join(".gitconfig")).ok()?;
+    let mut name = String::new();
+    let mut email = String::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("name =") {
+            name = value.trim().to_string();
+        } else if let Some(value) = trimmed.strip_prefix("email =") {
+            email = value.trim().to_string();
+        }
+    }
+    Some((name, email))
+}
+
+fn prompt_yes_no(prompt: &str) -> Result<bool> {
+    print!("{}", prompt);
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn package_installed(name: &str) -> bool {
+    Command::new("pacman")
+        .args(["-Q", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn preview_list(items: &[String], max: usize) -> String {
+    let mut preview = items.iter().take(max).cloned().collect::<Vec<_>>();
+    if items.len() > max {
+        preview.push("...".to_string());
+    }
+    preview.join(", ")
+}
+
+fn count_tree_differences(src: &Path, dst: &Path) -> Result<usize> {
+    if !src.exists() {
+        return Ok(0);
+    }
+    if !dst.exists() {
+        return Ok(1);
+    }
+
+    let mut diff_count = 0usize;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        diff_count += compare_path(&src_path, &dst_path)?;
+    }
+    Ok(diff_count)
+}
+
+fn compare_path(src: &Path, dst: &Path) -> Result<usize> {
+    let src_meta = fs::symlink_metadata(src)?;
+    if !dst.exists() {
+        return Ok(1);
+    }
+    let dst_meta = fs::symlink_metadata(dst)?;
+
+    if src_meta.file_type().is_symlink() {
+        return Ok((fs::read_link(src)? != fs::read_link(dst)?).into());
+    }
+    if src_meta.is_dir() {
+        if !dst_meta.is_dir() {
+            return Ok(1);
+        }
+        let mut total = 0usize;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            total += compare_path(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        return Ok(total);
+    }
+    if !dst_meta.is_file() {
+        return Ok(1);
+    }
+    Ok((fs::read(src)? != fs::read(dst)?).into())
+}
+
+fn user_in_group(username: &str, group: &str) -> Result<bool> {
+    let output = Command::new("id")
+        .args(["-nG", username])
+        .output()
+        .with_context(|| format!("Failed to inspect groups for {}", username))?;
+    if !output.status.success() {
+        bail!("Failed to inspect groups for {}", username);
+    }
+    let groups = String::from_utf8_lossy(&output.stdout);
+    Ok(groups.split_whitespace().any(|item| item == group))
+}
+
+fn owned_by_user(path: &Path, username: &str) -> Result<bool> {
+    let user = nix::unistd::User::from_name(username)?
+        .ok_or_else(|| anyhow!("User not found: {}", username))?;
+    let metadata = fs::metadata(path)?;
+    Ok(metadata.uid() == user.uid.as_raw())
+}
+
+fn service_enabled(service: &str) -> bool {
+    Command::new("systemctl")
+        .args(["is-enabled", service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn fetch_ax_binary() -> Result<()> {
+    run_simple(
+        "curl",
+        &["-L", "--fail", AX_BINARY_URL, "-o", "/usr/local/bin/ax"],
+    )?;
+    run_simple("chmod", &["+x", "/usr/local/bin/ax"])?;
+    Ok(())
+}
+
+fn write_user_shell_files(home: &Path) -> Result<()> {
+    fs::write(
+        home.join(".zprofile"),
+        "if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]] && command -v Hyprland >/dev/null; then\n  exec Hyprland\nfi\n",
+    )?;
+    fs::write(
+        home.join(".zshrc"),
+        "alias ls='eza --icons'\nalias ll='eza -lha --icons'\nalias cat='bat'\nalias grep='rg'\neval \"$(starship init zsh)\"\neval \"$(zoxide init zsh)\"\nexport PATH=$PATH:$HOME/.local/bin\n",
+    )?;
+    Ok(())
+}
+
+fn write_locale_static() -> Result<()> {
+    let locale_gen = "/etc/locale.gen";
+    let content = fs::read_to_string(locale_gen).context("Failed to read locale.gen")?;
+    let updated = content.replace("#en_US.UTF-8 UTF-8", "en_US.UTF-8 UTF-8");
+    fs::write(locale_gen, updated)?;
+    fs::write("/etc/locale.conf", "LANG=en_US.UTF-8\n")?;
+    run_simple("locale-gen", &[])?;
+    Ok(())
+}
+
+fn write_timezone_static(timezone: &str) -> Result<()> {
+    let target = format!("/usr/share/zoneinfo/{}", timezone);
+    if !Path::new(&target).exists() {
+        bail!("Timezone not found: {}", timezone);
+    }
+    if Path::new("/etc/localtime").exists() {
+        let _ = fs::remove_file("/etc/localtime");
+    }
+    std::os::unix::fs::symlink(&target, "/etc/localtime")?;
+    run_simple("hwclock", &["--systohc"])?;
+    Ok(())
+}
+
+fn write_bootloader_files() -> Result<()> {
+    run_simple("bootctl", &["install"])?;
+    let root_device = system::find_mount_source("/")?
+        .ok_or_else(|| anyhow!("Failed to determine root mount source"))?;
+    let root_uuid = system::get_uuid(&root_device)?;
+    fs::create_dir_all("/boot/loader/entries")?;
+    fs::write(
+        "/boot/loader/loader.conf",
+        "default slate.conf\ntimeout 3\nconsole-mode max\n",
+    )?;
+    fs::write(
+        "/boot/loader/entries/slate.conf",
+        format!(
+            "title Slate\nlinux /vmlinuz-linux\ninitrd /intel-ucode.img\ninitrd /amd-ucode.img\ninitrd /initramfs-linux.img\noptions root=UUID={} rw rootflags=subvol=@\n",
+            root_uuid
+        ),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_package_name, parse_requirements, sanitize_for_log, set_hypr_keymap, Checkpoint,
-        InstallPlan, StageId,
+        detect_timezone, normalize_package_name, parse_requirements, sanitize_for_log,
+        set_hypr_keymap, Checkpoint, InstallPlan, StageId,
     };
 
     #[test]
@@ -1266,5 +1877,10 @@ mod tests {
         );
         assert!(updated.contains("kb_layout    = de"));
         assert!(!updated.contains("kb_layout    = us"));
+    }
+
+    #[test]
+    fn timezone_detection_handles_missing_link() {
+        let _ = detect_timezone();
     }
 }

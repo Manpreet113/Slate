@@ -18,6 +18,9 @@ enum Commands {
     /// Start the interactive TUI installer
     Install,
 
+    /// Repair an existing Slate system from the command line
+    Repair,
+
     /// Verify system requirements before installation
     Check {
         #[arg(long)]
@@ -35,6 +38,9 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Install => {
             commands::forge()?;
+        }
+        Commands::Repair => {
+            commands::repair()?;
         }
         Commands::Check { verbose } => {
             commands::check(verbose)?;
