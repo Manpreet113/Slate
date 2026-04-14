@@ -426,10 +426,12 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
         let mut updated = content.clone();
         
         // Parallel Downloads
-        if content.contains("#ParallelDownloads") {
+        if content.contains("ParallelDownloads") {
             updated = updated.replace("#ParallelDownloads", "ParallelDownloads");
-        } else if !content.contains("ParallelDownloads") {
-            updated.push_str("\nParallelDownloads = 5\n");
+            updated = updated.replace("ParallelDownloads = 5", "ParallelDownloads = 10");
+            updated = updated.replace("ParallelDownloads = 1", "ParallelDownloads = 10");
+        } else {
+            updated.push_str("\nParallelDownloads = 10\n");
         }
 
         // Disable Download Timeout
@@ -455,18 +457,18 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
     let current_mirrors = fs::read_to_string(mirrorlist_path).unwrap_or_default();
     let _ = fs::write(mirrorlist_path, format!("{}{}", reliable_mirrors, current_mirrors));
 
-    // 3. Turbo-rank top 10 mirrors (excluding the problematic pkgbuild.com)
+    // 3. Turbo-rank top 5 mirrors with high parallelism and regional focus
     run_cmd_captured(
         "reflector",
         &[
             "--latest",
-            "10",
+            "5",
             "--protocol",
             "https",
             "--sort",
             "rate",
             "--threads",
-            "10",
+            "20",
             "--download-timeout",
             "10",
             "--country",

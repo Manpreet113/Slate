@@ -68,16 +68,18 @@ fn setup_fast_downloads() -> Result<()> {
     let content = fs::read_to_string(pacman_conf)?;
     let mut updated = content.clone();
 
-    if content.contains("#ParallelDownloads") {
+    if content.contains("ParallelDownloads") {
         updated = updated.replace("#ParallelDownloads", "ParallelDownloads");
-    } else if !content.contains("ParallelDownloads") {
+        updated = updated.replace("ParallelDownloads = 5", "ParallelDownloads = 10");
+        updated = updated.replace("ParallelDownloads = 1", "ParallelDownloads = 10");
+    } else {
         // Try to insert after [options]
         if let Some(pos) = content.find("[options]") {
             if let Some(line_end) = content[pos..].find('\n') {
-                updated.insert_str(pos + line_end + 1, "ParallelDownloads = 5\n");
+                updated.insert_str(pos + line_end + 1, "ParallelDownloads = 10\n");
             }
         } else {
-            updated.push_str("\nParallelDownloads = 5\n");
+            updated.push_str("\nParallelDownloads = 10\n");
         }
     }
 
@@ -497,7 +499,7 @@ fn normalize_package_name(name: &str) -> String {
     match name.trim() {
         "python3" => "python",
         "pactl" => "libpulse",
-        "fonts-inter" => "ttf-inter",
+        "fonts-inter" => "inter-font",
         "fonts-roboto-mono" => "ttf-roboto-mono",
         "nm-connection-editor" => "network-manager-applet",
         other => other,
