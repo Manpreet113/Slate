@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "slate")]
-#[command(about = "Arch Linux Installer", version = "0.2.0")]
+#[command(about = "Arch Linux installer for the Slate shell", version = "0.2.0")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

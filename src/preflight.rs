@@ -79,7 +79,10 @@ fn check_tools() -> Result<()> {
     ];
     let mut missing = Vec::new();
     for tool in tools {
-        let status = Command::new("sh").arg("-c").arg(format!("command -v {}", tool)).status();
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {}", tool))
+            .status();
         if !status.map(|s| s.success()).unwrap_or(false) {
             missing.push(tool);
         }
@@ -91,7 +94,9 @@ fn check_tools() -> Result<()> {
 }
 
 fn check_network() -> Result<()> {
-    let status = Command::new("curl").args(["-I", "https://archlinux.org"]).status();
+    let status = Command::new("curl")
+        .args(["-I", "https://archlinux.org"])
+        .status();
     if !status.map(|s| s.success()).unwrap_or(false) {
         bail!("Network unreachable.");
     }

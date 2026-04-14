@@ -30,7 +30,9 @@ fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Se
     let dev_path = &device.path;
 
     let res = (|| -> Result<()> {
-        tx.send(InstallMsg::Log("Initializing Preflight Checks...".to_string()))?;
+        tx.send(InstallMsg::Log(
+            "Initializing Preflight Checks...".to_string(),
+        ))?;
         tx.send(InstallMsg::Progress(2))?;
 
         // 1. Preflight
@@ -67,7 +69,7 @@ fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Se
         let _ = fs::remove_file(user_info_path);
         tx.send(InstallMsg::Progress(100))?;
         tx.send(InstallMsg::Finished)?;
-        
+
         Ok(())
     })();
 
@@ -100,7 +102,10 @@ fn wait_for_partition(part_path: &str, tx: &Sender<InstallMsg>) -> Result<()> {
         }
         sleep(Duration::from_millis(200));
     }
-    let _ = tx.send(InstallMsg::Log(format!("[Err] Partition node not ready: {}", part_path)));
+    let _ = tx.send(InstallMsg::Log(format!(
+        "[Err] Partition node not ready: {}",
+        part_path
+    )));
     bail!("Partition node not ready: {}", part_path)
 }
 
@@ -117,18 +122,38 @@ fn subvolume_dance(device: &str, guard: &mut MountGuard, tx: &Sender<InstallMsg>
     guard.unmount("/mnt")?;
 
     let mount_opts = "rw,noatime,compress=zstd,discard=async,space_cache=v2";
-    guard.mount(&root_part, "/mnt", &["-o", &format!("subvol=@,{}", mount_opts)])?;
-    
+    guard.mount(
+        &root_part,
+        "/mnt",
+        &["-o", &format!("subvol=@,{}", mount_opts)],
+    )?;
+
     fs::create_dir_all("/mnt/home")?;
     fs::create_dir_all("/mnt/var/log")?;
     fs::create_dir_all("/mnt/var/cache/pacman/pkg")?;
     fs::create_dir_all("/mnt/.snapshots")?;
     fs::create_dir_all("/mnt/boot")?;
 
-    guard.mount(&root_part, "/mnt/home", &["-o", &format!("subvol=@home,{}", mount_opts)])?;
-    guard.mount(&root_part, "/mnt/var/log", &["-o", &format!("subvol=@log,{}", mount_opts)])?;
-    guard.mount(&root_part, "/mnt/var/cache/pacman/pkg", &["-o", &format!("subvol=@pkg,{}", mount_opts)])?;
-    guard.mount(&root_part, "/mnt/.snapshots", &["-o", &format!("subvol=@snapshots,{}", mount_opts)])?;
+    guard.mount(
+        &root_part,
+        "/mnt/home",
+        &["-o", &format!("subvol=@home,{}", mount_opts)],
+    )?;
+    guard.mount(
+        &root_part,
+        "/mnt/var/log",
+        &["-o", &format!("subvol=@log,{}", mount_opts)],
+    )?;
+    guard.mount(
+        &root_part,
+        "/mnt/var/cache/pacman/pkg",
+        &["-o", &format!("subvol=@pkg,{}", mount_opts)],
+    )?;
+    guard.mount(
+        &root_part,
+        "/mnt/.snapshots",
+        &["-o", &format!("subvol=@snapshots,{}", mount_opts)],
+    )?;
 
     let efi_part = resolve_partition(device, 1);
     guard.mount(&efi_part, "/mnt/boot", &[])?;
@@ -157,11 +182,17 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
         "curl",
     ];
 
-    tx.send(InstallMsg::Log("Updating Arch Linux Keyring...".to_string()))?;
+    tx.send(InstallMsg::Log(
+        "Updating Arch Linux Keyring...".to_string(),
+    ))?;
     let _ = run_cmd_captured("pacman", &["-Sy", "archlinux-keyring", "--noconfirm"], tx);
 
-    tx.send(InstallMsg::Log("[Phase 1/3] pacstrap essentials".to_string()))?;
-    tx.send(InstallMsg::Log("Starting Pacstrap (Essentials)...".to_string()))?;
+    tx.send(InstallMsg::Log(
+        "[Phase 1/3] pacstrap essentials".to_string(),
+    ))?;
+    tx.send(InstallMsg::Log(
+        "Starting Pacstrap (Essentials)...".to_string(),
+    ))?;
     let mut args = vec!["-K", "/mnt"];
     args.extend(packages.iter());
     run_cmd_captured("pacstrap", &args, tx)?;
@@ -170,12 +201,27 @@ fn injection(tx: &Sender<InstallMsg>) -> Result<()> {
     let output = Command::new("genfstab").args(["-U", "/mnt"]).output()?;
     fs::write("/mnt/etc/fstab", output.stdout)?;
 
-    tx.send(InstallMsg::Log("Injecting binaries (Slate & Ax)...".to_string()))?;
+    tx.send(InstallMsg::Log(
+        "Injecting binaries (Slate & Ax)...".to_string(),
+    ))?;
     let current_exe = std::env::current_exe()?;
     fs::copy(&current_exe, "/mnt/usr/local/bin/slate")?;
 
-    run_cmd_captured("curl", &["-L", "https://github.com/manpreet113/ax/releases/latest/download/ax", "-o", "/mnt/usr/local/bin/ax"], tx)?;
-    run_cmd_captured("chmod", &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate"], tx)?;
+    run_cmd_captured(
+        "curl",
+        &[
+            "-L",
+            "https://github.com/manpreet113/ax/releases/latest/download/ax",
+            "-o",
+            "/mnt/usr/local/bin/ax",
+        ],
+        tx,
+    )?;
+    run_cmd_captured(
+        "chmod",
+        &["+x", "/mnt/usr/local/bin/ax", "/mnt/usr/local/bin/slate"],
+        tx,
+    )?;
 
     Ok(())
 }
@@ -234,7 +280,9 @@ fn run_cmd_captured(cmd: &str, args: &[&str], tx: &Sender<InstallMsg>) -> Result
     let _ = err_handle.join();
 
     if !status.success() {
-        let code = status.code().map_or("signal".to_string(), |c| c.to_string());
+        let code = status
+            .code()
+            .map_or("signal".to_string(), |c| c.to_string());
         let stderr_tail = stderr_lines
             .lock()
             .ok()
@@ -302,11 +350,17 @@ struct MountGuard<'a> {
 
 impl<'a> MountGuard<'a> {
     fn new(tx: &'a Sender<InstallMsg>) -> Self {
-        Self { mounts: Vec::new(), tx }
+        Self {
+            mounts: Vec::new(),
+            tx,
+        }
     }
 
     fn mount(&mut self, source: &str, target: &str, options: &[&str]) -> Result<()> {
-        let _ = self.tx.send(InstallMsg::Log(format!("Mounting {} -> {}", source, target)));
+        let _ = self.tx.send(InstallMsg::Log(format!(
+            "Mounting {} -> {}",
+            source, target
+        )));
         let status = Command::new("mount")
             .args(options)
             .arg(source)
@@ -314,19 +368,25 @@ impl<'a> MountGuard<'a> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
-        if !status.success() { bail!("Mount failed"); }
+        if !status.success() {
+            bail!("Mount failed");
+        }
         self.mounts.push(PathBuf::from(target));
         Ok(())
     }
 
     fn unmount(&mut self, target: &str) -> Result<()> {
-        let _ = self.tx.send(InstallMsg::Log(format!("Unmounting {}", target)));
+        let _ = self
+            .tx
+            .send(InstallMsg::Log(format!("Unmounting {}", target)));
         let status = Command::new("umount")
             .arg(target)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
-        if !status.success() { bail!("Unmount failed"); }
+        if !status.success() {
+            bail!("Unmount failed");
+        }
         if let Some(pos) = self.mounts.iter().position(|p| p == Path::new(target)) {
             self.mounts.remove(pos);
         }

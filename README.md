@@ -1,17 +1,18 @@
 # SLATE 🪐
 
-Slate is currently a semi-automated Arch Linux OS installer built with **Ratatui**. It provides a premium, full-screen Terminal User Interface (TUI) to streamline setting up a clean, optimized Arch Linux system with **Btrfs** and **systemd-boot**.
+Slate is a semi-automated Arch Linux installer built with **Ratatui**. It provisions a full Arch system plus the **Slate shell**: a Hyprland + Quickshell desktop profile deployed automatically during installation.
 
 ![TUI Demo](https://img.shields.io/badge/TUI-Premium-blueviolet)
 ![Rust](https://img.shields.io/badge/Language-Rust-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Current Status
-As of right now, Slate primarily functions as an Arch Linux installer. It handles:
+Slate currently handles:
 - Interactive disk selection and multi-step configuration forms.
 - Zero-typing automatic partitioning (1GB EFI + remaining Btrfs).
 - Automated Btrfs subvolume layout (`@`, `@home`, `@log`, `@pkg`, `@snapshots`).
 - Bootloader setup and `ax` tool installation.
+- Automatic Slate shell provisioning from the upstream shell repo, including package installation and Hyprland shell config deployment.
 
 ## Usage
 
@@ -26,6 +27,7 @@ As of right now, Slate primarily functions as an Arch Linux installer. It handle
    sudo ./slate install
    ```
 4. Follow the TUI prompts to configure your hostname, user, keymap, and select your target disk.
+5. Let Slate finish chroot provisioning; it will clone the Slate shell repo, install the desktop packages through `ax`, and deploy the shell files automatically.
 
 ## Development
 

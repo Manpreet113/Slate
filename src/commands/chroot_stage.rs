@@ -1,34 +1,29 @@
 use crate::system;
+use crate::tui::UserInfo;
 use anyhow::{bail, Context, Result};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use crate::tui::UserInfo;
+
+const SHELL_REPO_URL: &str = "https://github.com/manpreet113/shell.git";
+const SHELL_REPO_DIR: &str = "/tmp/slate-shell";
+const SHELL_PLUGIN_REPO: &str = "https://github.com/hyprwm/hyprland-plugins.git";
+const TEMP_SUDOERS_FILE: &str = "/etc/sudoers.d/10-slate-ax";
 
 pub fn chroot_stage() -> Result<()> {
-    // 1. Load User Info
     let user_info_path = Path::new("/root/user_info.json");
-    let user_info_content = fs::read_to_string(user_info_path)
-        .context("Failed to read user_info.json in chroot")?;
+    let user_info_content =
+        fs::read_to_string(user_info_path).context("Failed to read user_info.json in chroot")?;
     let user_info: UserInfo = serde_json::from_str(&user_info_content)?;
 
-    // 2. Base System Config
     configure_base(&user_info)?;
-
-    // 3. User & Auth & Shell
     configure_user(&user_info)?;
-
-    // 4. Desktop Environment (Direct Boot & Hyprland)
-    configure_desktop(&user_info)?;
-
-    // 5. Tooling (Ax, VSCode, Clipse, Git)
+    configure_shell(&user_info)?;
     configure_tools(&user_info)?;
-
-    // 6. Post-config Services
     configure_post_services()?;
-
-    // 7. Bootloader
     configure_boot()?;
 
     Ok(())
@@ -39,10 +34,8 @@ fn configure_base(config: &UserInfo) -> Result<()> {
 
     enable_multilib_repo()?;
 
-    // Hostname
     fs::write("/etc/hostname", format!("{}\n", config.hostname))?;
 
-    // Timezone
     let _ = fs::remove_file("/etc/localtime");
     let zone_path = format!("/usr/share/zoneinfo/{}", config.timezone);
     if Path::new(&zone_path).exists() {
@@ -51,7 +44,6 @@ fn configure_base(config: &UserInfo) -> Result<()> {
         let _ = std::os::unix::fs::symlink("/usr/share/zoneinfo/UTC", "/etc/localtime");
     }
 
-    // Locale
     let locale_gen = "/etc/locale.gen";
     if Path::new(locale_gen).exists() {
         let content = fs::read_to_string(locale_gen)?;
@@ -60,11 +52,7 @@ fn configure_base(config: &UserInfo) -> Result<()> {
         run_command("locale-gen", &[])?;
     }
     fs::write("/etc/locale.conf", "LANG=en_US.UTF-8\n")?;
-
-    // Keymap
     fs::write("/etc/vconsole.conf", format!("KEYMAP={}\n", config.keymap))?;
-
-    // Time & NTP
     run_command("hwclock", &["--systohc"])?;
 
     Ok(())
@@ -77,11 +65,12 @@ fn enable_multilib_repo() -> Result<()> {
     }
 
     let content = fs::read_to_string(pacman_conf)?;
-    if content.contains("\n[multilib]\n") && content.contains("\nInclude = /etc/pacman.d/mirrorlist\n") {
+    if content.contains("\n[multilib]\n")
+        && content.contains("\nInclude = /etc/pacman.d/mirrorlist\n")
+    {
         return Ok(());
     }
 
-    // Enable only the [multilib] block include, not any Include line in [options].
     let mut updated_lines: Vec<String> = Vec::new();
     let mut in_multilib = false;
     let mut saw_multilib = false;
@@ -137,15 +126,15 @@ fn enable_multilib_repo() -> Result<()> {
 fn configure_user(config: &UserInfo) -> Result<()> {
     println!("  > Configuring User & Zsh...");
 
-    // Create user with Zsh
-    run_command("useradd", &["-m", "-G", "wheel", "-s", "/usr/bin/zsh", &config.username])?;
+    run_command(
+        "useradd",
+        &["-m", "-G", "wheel", "-s", "/usr/bin/zsh", &config.username],
+    )?;
 
-    // Set passwords
     let root_auth = format!("root:{}", config.password);
     let user_auth = format!("{}:{}", config.username, config.password);
     run_command_stdin("chpasswd", &[], &format!("{}\n{}", root_auth, user_auth))?;
 
-    // Sudoers
     let sudoers_file = "/etc/sudoers";
     if Path::new(sudoers_file).exists() {
         let sudoers = fs::read_to_string(sudoers_file)?;
@@ -153,7 +142,6 @@ fn configure_user(config: &UserInfo) -> Result<()> {
         fs::write(sudoers_file, new_sudoers)?;
     }
 
-    // Modern Zshrc
     let zshrc = r#"
 # slate-desktop: modern zshrc
 alias ls='eza --icons'
@@ -163,325 +151,194 @@ alias cat='bat'
 alias grep='rg'
 alias cd='zoxide'
 
-# Starship Prompt
 eval "$(starship init zsh)"
 eval "$(zoxide init zsh)"
 
-# Path
 export PATH=$PATH:$HOME/.local/bin
 "#;
     let user_home = format!("/home/{}", config.username);
     fs::write(format!("{}/.zshrc", user_home), zshrc)?;
-    
-    // Auto-login to TTY1
+
     fs::create_dir_all("/etc/systemd/system/getty@tty1.service.d")?;
-    let autologin_override = format!(r#"[Service]
+    let autologin_override = format!(
+        r#"[Service]
 ExecStart=
 ExecStart=-/usr/bin/agetty --autologin {} --noclear %I $TERM
-"#, config.username);
-    fs::write("/etc/systemd/system/getty@tty1.service.d/override.conf", autologin_override)?;
+"#,
+        config.username
+    );
+    fs::write(
+        "/etc/systemd/system/getty@tty1.service.d/override.conf",
+        autologin_override,
+    )?;
 
-    // Auto-start Hyprland via .zprofile
     let zprofile = r#"
 # slate-desktop: auto-start hyprland on tty1
 if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
-  exec start-hyprland
+  exec Hyprland
 fi
 "#;
     fs::write(format!("{}/.zprofile", user_home), zprofile)?;
-    
-    // Starship config (minimal)
-    fs::create_dir_all(format!("{}/.config", user_home))?;
-    fs::write(format!("{}/.config/starship.toml", user_home), "[add_newline]\ninsert_newline = false\n")?;
 
-    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &user_home])?;
+    fs::create_dir_all(format!("{}/.config", user_home))?;
+    fs::write(
+        format!("{}/.config/starship.toml", user_home),
+        "[add_newline]\ninsert_newline = false\n",
+    )?;
+
+    run_command(
+        "chown",
+        &[
+            "-R",
+            &format!("{}:{}", config.username, config.username),
+            &user_home,
+        ],
+    )?;
 
     Ok(())
 }
 
-fn configure_desktop(config: &UserInfo) -> Result<()> {
-    println!("  > Configuring Modular Hyprland...");
+fn configure_shell(config: &UserInfo) -> Result<()> {
+    println!("[Phase 2/3] shell provisioning");
 
     let user_home = format!("/home/{}", config.username);
-    let hypr_dir = format!("{}/.config/hypr", user_home);
-    fs::create_dir_all(&hypr_dir)?;
+    let shell_repo = provision_shell_repo()?;
+    let requirements = parse_requirements_file(&shell_repo.join("requirements.txt"))
+        .context("Failed to parse shell requirements")?;
+    let packages = merged_package_plan(&requirements);
 
-    // 1. hyprland.conf (Main Loader)
-    let hypr_main = r#"
-# slate-desktop: modular hyprland config
-source = ~/.config/hypr/monitors.conf
-source = ~/.config/hypr/autostart.conf
-source = ~/.config/hypr/input.conf
-source = ~/.config/hypr/appearance.conf
-source = ~/.config/hypr/animations.conf
-source = ~/.config/hypr/keybinds.conf
-source = ~/.config/hypr/windowrules.conf
+    install_shell_packages(config, &user_home, &packages)?;
+    deploy_shell_files(config, &user_home, &shell_repo)?;
+    apply_shell_overrides(config, &user_home)?;
+    configure_shell_plugins(config, &user_home)?;
 
-$terminal = kitty
-$browser = firefox
-"#;
-    fs::write(format!("{}/hyprland.conf", hypr_dir), hypr_main)?;
+    let _ = fs::remove_dir_all(&shell_repo);
 
-    // 2. monitors.conf
-    let hypr_monitors = r#"
-# Displays
-monitor=,preferred,auto,auto
-"#;
-    fs::write(format!("{}/monitors.conf", hypr_dir), hypr_monitors)?;
-
-    // 3. autostart.conf
-    let hypr_autostart = r#"
-# Security: start hyprlock immediately
-exec-once = hyprlock
-
-# Core Services
-exec-once = clipse -listen
-
-# Shell (Quickshell)
-exec-once = swww-daemon
-exec-once = qs -p ~/.config/shell/shell.qml
-"#;
-    fs::write(format!("{}/autostart.conf", hypr_dir), hypr_autostart)?;
-
-    // 4. input.conf
-    let hypr_input = format!(r#"
-input {{
-    kb_layout = {}
-    follow_mouse = 1
-    touchpad {{
-        natural_scroll = yes
-    }}
-}}
-"#, config.keymap);
-    fs::write(format!("{}/input.conf", hypr_dir), hypr_input)?;
-
-    // 5. appearance.conf
-    let hypr_appearance = r#"
-general {
-    gaps_in = 5
-    gaps_out = 10
-    border_size = 2
-    col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
-    col.inactive_border = rgba(595959aa)
-    layout = dwindle
+    Ok(())
 }
 
-decoration {
-    rounding = 10
-    blur {
-        enabled = true
-        size = 8
-        passes = 2
-        new_optimizations = on
+fn provision_shell_repo() -> Result<PathBuf> {
+    println!("  > Cloning Slate shell repo...");
+
+    let shell_repo = PathBuf::from(SHELL_REPO_DIR);
+    if shell_repo.exists() {
+        fs::remove_dir_all(&shell_repo).context("Failed to remove existing shell checkout")?;
     }
-    drop_shadow = yes
-    shadow_range = 10
-    shadow_render_power = 3
-    col.shadow = rgba(1a1a1aee)
+
+    run_command(
+        "git",
+        &["clone", "--depth=1", SHELL_REPO_URL, SHELL_REPO_DIR],
+    )?;
+
+    Ok(shell_repo)
 }
-"#;
-    fs::write(format!("{}/appearance.conf", hypr_dir), hypr_appearance)?;
 
-    // 6. animations.conf
-    let hypr_animations = r#"
-animations {
-    enabled = true
-    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
-    animation = windows, 1, 7, myBezier
-    animation = windowsOut, 1, 7, default, popin 80%
-    animation = border, 1, 10, default
-    animation = fade, 1, 7, default
-    animation = workspaces, 1, 6, default
+fn install_shell_packages(config: &UserInfo, user_home: &str, packages: &[String]) -> Result<()> {
+    println!("  > Installing Slate shell packages with Ax...");
+
+    if packages.is_empty() {
+        return Ok(());
+    }
+
+    let sudoers_rule = format!("{} ALL=(ALL) NOPASSWD: ALL\n", config.username);
+    fs::write(TEMP_SUDOERS_FILE, sudoers_rule)?;
+    fs::set_permissions(TEMP_SUDOERS_FILE, fs::Permissions::from_mode(0o440))?;
+
+    let mut args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
+    args.extend(packages.iter().map(String::as_str));
+
+    let result = run_command_as_user(config, user_home, "ax", &args);
+    let cleanup = fs::remove_file(TEMP_SUDOERS_FILE);
+
+    if let Err(err) = cleanup {
+        cleanup_failed(err)?;
+    }
+
+    result
 }
-"#;
-    fs::write(format!("{}/animations.conf", hypr_dir), hypr_animations)?;
 
-    // 7. keybinds.conf
-    let hypr_keybinds = r#"
-# Core Binds
-bind = SUPER, Return, exec, $terminal
-bind = SUPER, T,      exec, $terminal
-bind = SUPER, B,      exec, $browser
-bind = SUPER, Q,      killactive,
-bind = SUPER, M,      exit,
-bind = SUPER, V,      togglefloating,
-bind = SUPER, F,      fullscreen, 0
-bind = SUPER SHIFT, F, fullscreen, 1
+fn deploy_shell_files(config: &UserInfo, user_home: &str, shell_repo: &Path) -> Result<()> {
+    println!("  > Deploying shell files...");
 
-# Launcher (Quickshell IPC)
-bind = SUPER, Space, exec, qs ipc call shell toggleLauncher
+    let config_src = shell_repo.join(".config");
+    let local_src = shell_repo.join(".local");
+    let config_dst = Path::new(user_home).join(".config");
+    let local_dst = Path::new(user_home).join(".local");
 
-# Wallpaper picker
-bind = SUPER, W, exec, ~/.config/shell/scripts/wallpaper.sh
+    fs::create_dir_all(&config_dst)?;
+    copy_dir_contents(&config_src, &config_dst)?;
 
-# Clipboard manager
-bind = SUPER SHIFT, V, exec, kitty --title clipse -e clipse
+    if local_src.exists() {
+        fs::create_dir_all(&local_dst)?;
+        copy_dir_contents(&local_src, &local_dst)?;
+    }
 
-# Window Focus (vim + arrows)
-bind = SUPER, H, movefocus, l
-bind = SUPER, L, movefocus, r
-bind = SUPER, K, movefocus, u
-bind = SUPER, J, movefocus, d
-bind = SUPER, left,  movefocus, l
-bind = SUPER, right, movefocus, r
-bind = SUPER, up,    movefocus, u
-bind = SUPER, down,  movefocus, d
+    let wallpaper_script = config_dst.join("quickshell/scripts/wallpaper.sh");
+    if wallpaper_script.exists() {
+        fs::set_permissions(&wallpaper_script, fs::Permissions::from_mode(0o755))?;
+    }
 
-# Move windows
-bind = SUPER SHIFT, H, movewindow, l
-bind = SUPER SHIFT, L, movewindow, r
-bind = SUPER SHIFT, K, movewindow, u
-bind = SUPER SHIFT, J, movewindow, d
+    run_command(
+        "chown",
+        &[
+            "-R",
+            &format!("{}:{}", config.username, config.username),
+            user_home,
+        ],
+    )?;
 
-# Workspaces
-bind = SUPER, 1, workspace, 1
-bind = SUPER, 2, workspace, 2
-bind = SUPER, 3, workspace, 3
-bind = SUPER, 4, workspace, 4
-bind = SUPER, 5, workspace, 5
-bind = SUPER, 6, workspace, 6
+    Ok(())
+}
 
-bind = SUPER SHIFT, 1, movetoworkspace, 1
-bind = SUPER SHIFT, 2, movetoworkspace, 2
-bind = SUPER SHIFT, 3, movetoworkspace, 3
-bind = SUPER SHIFT, 4, movetoworkspace, 4
-bind = SUPER SHIFT, 5, movetoworkspace, 5
+fn apply_shell_overrides(config: &UserInfo, user_home: &str) -> Result<()> {
+    println!("  > Applying Slate-specific shell overrides...");
 
-# Mouse bindings
-bindm = SUPER, mouse:272, movewindow
-bindm = SUPER, mouse:273, resizewindow
-"#;
-    fs::write(format!("{}/keybinds.conf", hypr_dir), hypr_keybinds)?;
+    let input_conf = Path::new(user_home).join(".config/hypr/conf.d/input.conf");
+    if input_conf.exists() {
+        let content = fs::read_to_string(&input_conf)?;
+        let updated = set_hypr_keymap(&content, &config.keymap);
+        fs::write(&input_conf, updated)?;
+    }
 
-    // 8. windowrules.conf
-    let hypr_windowrules = r#"
-# Floating Dialogs
-windowrule = float, file_progress
-windowrule = float, confirm
-windowrule = float, dialog
-windowrule = float, download
-windowrule = float, notification
-windowrule = float, error
-windowrule = float, splash
-windowrule = float, confirmreset
-windowrule = float, title:Open File
-windowrule = float, title:branchdialog
-windowrule = float, Lxappearance
-windowrule = float, pavucontrol-qt
-windowrule = float, pavucontrol
-windowrule = float, file-roller
-windowrule = float, title:wlogout
+    Ok(())
+}
 
-# Opacity Rules
-windowrulev2 = opacity 0.9 0.9,class:^(kitty)$
-windowrulev2 = opacity 0.95 0.9,class:^(firefox)$
+fn configure_shell_plugins(config: &UserInfo, user_home: &str) -> Result<()> {
+    println!("  > Enabling Hyprland shell plugin...");
 
-# Clipse Floating setup (requires title param in bind)
-windowrulev2 = float,class:(kitty),title:(clipse)
-windowrulev2 = size 800 600,class:(kitty),title:(clipse)
-"#;
-    fs::write(format!("{}/windowrules.conf", hypr_dir), hypr_windowrules)?;
-
-    run_command("chown", &["-R", &format!("{}:{}", config.username, config.username), &hypr_dir])?;
-
-    // Install shell config (Quickshell-based)
-    install_shell_config(config, &user_home)?;
+    run_command_as_user(config, user_home, "hyprpm", &["update"])?;
+    run_command_as_user(config, user_home, "hyprpm", &["add", SHELL_PLUGIN_REPO])?;
+    run_command_as_user(config, user_home, "hyprpm", &["enable", "hyprscrolling"])?;
 
     Ok(())
 }
 
 fn configure_tools(config: &UserInfo) -> Result<()> {
-    println!("[Phase 2/3] package setup");
-    println!("  > Finalizing Tools (pacman stage)...");
+    println!("[Phase 3/3] post-install configuration");
 
-    // Git Config
     if !config.git_name.is_empty() {
         let user_home = format!("/home/{}", config.username);
-        let gitconfig = format!(r#"[user]
+        let gitconfig = format!(
+            r#"[user]
 	name = {}
 	email = {}
-"#, config.git_name, config.git_email);
+"#,
+            config.git_name, config.git_email
+        );
         fs::write(format!("{}/.gitconfig", user_home), gitconfig)?;
-        run_command("chown", &[&format!("{}:{}", config.username, config.username), &format!("{}/.gitconfig", user_home)])?;
+        run_command(
+            "chown",
+            &[
+                &format!("{}:{}", config.username, config.username),
+                &format!("{}/.gitconfig", user_home),
+            ],
+        )?;
     }
-
-    // Split official repo packages from AUR-only packages so we can gracefully
-    // fallback to pacman when Ax cannot run non-interactively in chroot.
-    let repo_packages = [
-        // Desktop/session
-        "hyprland",
-        "hyprlock",
-        "hypridle",
-        "xdg-desktop-portal-hyprland",
-        "qt6-wayland",
-        // Audio/media
-        "pipewire",
-        "wireplumber",
-        "pipewire-pulse",
-        "pipewire-alsa",
-        // Apps and CLI tools
-        "firefox",
-        "kitty",
-        "wofi",
-        "starship",
-        "eza",
-        "bat",
-        "zoxide",
-        "fzf",
-        "ripgrep",
-        // Utilities and extras
-        "network-manager-applet",
-        "blueman",
-        "pavucontrol",
-        "easyeffects",
-        "grim",
-        "slurp",
-        "imagemagick",
-        "jq",
-        "sqlite",
-        "upower",
-        "wl-clipboard",
-        "wlsunset",
-        "wtype",
-        "zbar",
-        "glib2",
-        "zenity",
-        "power-profiles-daemon",
-        // Fonts and AUR tooling packages
-        "ttf-roboto",
-        "ttf-roboto-mono",
-        "ttf-dejavu",
-        "ttf-liberation",
-        "noto-fonts",
-        "noto-fonts-cjk",
-        "noto-fonts-emoji",
-        "ttf-nerd-fonts-symbols",
-        "gpu-screen-recorder",
-        "adw-gtk-theme",
-        // Shell (Quickshell)
-        "quickshell",
-        "matugen",
-        "swww",
-        "python",
-        "python-gobject",
-    ];
-
-    let mut pacman_args: Vec<&str> = vec!["-S", "--needed", "--noconfirm"];
-    pacman_args.extend(repo_packages.iter().copied());
-    run_command("pacman", &pacman_args)?;
-
-    let skipped = vec!["visual-studio-code-bin", "clipse"];
-    println!(
-        "  ! AUR packages skipped during installer stage: {}",
-        skipped.join(", ")
-    );
-    println!("  ! Install these later after first boot using your preferred AUR helper.");
 
     Ok(())
 }
 
 fn configure_post_services() -> Result<()> {
-    println!("[Phase 3/3] post-config services");
     println!("  > Enabling core services...");
     run_command("systemctl", &["enable", "systemd-timesyncd"])?;
     run_command("systemctl", &["enable", "NetworkManager"])?;
@@ -510,12 +367,185 @@ fn configure_boot() -> Result<()> {
     Ok(())
 }
 
+fn slate_shell_packages() -> Vec<&'static str> {
+    vec![
+        "hyprlock",
+        "hypridle",
+        "xdg-desktop-portal-hyprland",
+        "qt6-wayland",
+        "pipewire",
+        "wireplumber",
+        "pipewire-pulse",
+        "pipewire-alsa",
+        "firefox",
+        "starship",
+        "eza",
+        "bat",
+        "zoxide",
+        "fzf",
+        "ripgrep",
+        "networkmanager",
+        "network-manager-applet",
+        "blueman",
+        "easyeffects",
+        "grim",
+        "slurp",
+        "imagemagick",
+        "sqlite",
+        "upower",
+        "wl-clipboard",
+        "wlsunset",
+        "wtype",
+        "zbar",
+        "glib2",
+        "power-profiles-daemon",
+        "ttf-roboto",
+        "ttf-dejavu",
+        "ttf-liberation",
+        "noto-fonts",
+        "noto-fonts-cjk",
+        "noto-fonts-emoji",
+        "ttf-nerd-fonts-symbols",
+        "gpu-screen-recorder",
+        "adw-gtk-theme",
+    ]
+}
+
+fn merged_package_plan(shell_requirements: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut packages = Vec::new();
+
+    for pkg in slate_shell_packages()
+        .into_iter()
+        .map(|pkg| pkg.to_string())
+        .chain(shell_requirements.iter().cloned())
+    {
+        if seen.insert(pkg.clone()) {
+            packages.push(pkg);
+        }
+    }
+
+    packages
+}
+
+fn parse_requirements_file(path: &Path) -> Result<Vec<String>> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read requirements file at {}", path.display()))?;
+    Ok(parse_requirements(&raw))
+}
+
+fn parse_requirements(raw: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut packages = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let normalized = normalize_package_name(trimmed);
+        if seen.insert(normalized.clone()) {
+            packages.push(normalized);
+        }
+    }
+
+    packages
+}
+
+fn normalize_package_name(name: &str) -> String {
+    match name.trim() {
+        "python3" => "python",
+        "pactl" => "libpulse",
+        "fonts-inter" => "ttf-inter",
+        "fonts-roboto-mono" => "ttf-roboto-mono",
+        "nm-connection-editor" => "network-manager-applet",
+        other => other,
+    }
+    .to_string()
+}
+
+fn set_hypr_keymap(content: &str, keymap: &str) -> String {
+    let mut updated = Vec::new();
+    let mut replaced = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("kb_layout") {
+            let indent_len = line.len() - trimmed.len();
+            let indent = " ".repeat(indent_len);
+            updated.push(format!("{indent}kb_layout    = {keymap}"));
+            replaced = true;
+        } else {
+            updated.push(line.to_string());
+        }
+    }
+
+    if !replaced {
+        updated.push(format!("    kb_layout    = {keymap}"));
+    }
+
+    let mut rendered = updated.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    if !src.exists() {
+        bail!("Required path missing: {}", src.display());
+    }
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        copy_path_recursive(&src_path, &dst_path)?;
+    }
+
+    Ok(())
+}
+
+fn copy_path_recursive(src: &Path, dst: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(src)?;
+
+    if metadata.is_dir() {
+        fs::create_dir_all(dst)?;
+        fs::set_permissions(
+            dst,
+            fs::Permissions::from_mode(metadata.permissions().mode()),
+        )?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_path_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else if metadata.file_type().is_symlink() {
+        let target = fs::read_link(src)?;
+        if dst.exists() {
+            let _ = fs::remove_file(dst);
+        }
+        std::os::unix::fs::symlink(target, dst)?;
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst)?;
+        fs::set_permissions(
+            dst,
+            fs::Permissions::from_mode(metadata.permissions().mode()),
+        )?;
+    }
+
+    Ok(())
+}
+
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     println!("    $ {} {}", cmd, args.join(" "));
     let output = Command::new(cmd)
         .args(args)
         .output()
-        .context(format!("Failed to run {}", cmd))?;
+        .with_context(|| format!("Failed to run {}", cmd))?;
 
     if !output.status.success() {
         let stderr = sanitize_for_tui(&String::from_utf8_lossy(&output.stderr));
@@ -525,6 +555,47 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
         }
         bail!("Command failed: {}: {}", cmd, stderr);
     }
+    Ok(())
+}
+
+fn run_command_as_user(config: &UserInfo, user_home: &str, cmd: &str, args: &[&str]) -> Result<()> {
+    println!(
+        "    $ sudo -H -u {} -- {} {}",
+        config.username,
+        cmd,
+        args.join(" ")
+    );
+
+    let mut child = Command::new("sudo");
+    child
+        .env("HOME", user_home)
+        .arg("-H")
+        .arg("-u")
+        .arg(&config.username)
+        .arg("--")
+        .arg(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = child
+        .output()
+        .with_context(|| format!("Failed to run {} as {}", cmd, config.username))?;
+
+    if !output.status.success() {
+        let stderr = sanitize_for_tui(&String::from_utf8_lossy(&output.stderr));
+        let stderr = stderr.trim().to_string();
+        if stderr.is_empty() {
+            bail!("Command failed: {} (as {})", cmd, config.username);
+        }
+        bail!(
+            "Command failed: {} (as {}): {}",
+            cmd,
+            config.username,
+            stderr
+        );
+    }
+
     Ok(())
 }
 
@@ -557,11 +628,10 @@ fn sanitize_for_tui(input: &str) -> String {
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        // Strip ANSI escape sequences (CSI and a few common OSC forms).
         if ch == '\u{1b}' {
             if let Some('[') = chars.peek().copied() {
                 let _ = chars.next();
-                while let Some(next) = chars.next() {
+                for next in chars.by_ref() {
                     if ('@'..='~').contains(&next) {
                         break;
                     }
@@ -570,7 +640,7 @@ fn sanitize_for_tui(input: &str) -> String {
             }
             if let Some(']') = chars.peek().copied() {
                 let _ = chars.next();
-                while let Some(next) = chars.next() {
+                for next in chars.by_ref() {
                     if next == '\u{7}' {
                         break;
                     }
@@ -580,7 +650,6 @@ fn sanitize_for_tui(input: &str) -> String {
             continue;
         }
 
-        // Drop control chars that can break layout, keep tabs/spaces.
         if ch == '\r' || (ch.is_control() && ch != '\n' && ch != '\t') {
             continue;
         }
@@ -591,49 +660,49 @@ fn sanitize_for_tui(input: &str) -> String {
     out
 }
 
-fn install_shell_config(config: &UserInfo, user_home: &str) -> Result<()> {
-    println!("  > Installing Quickshell shell config...");
+fn cleanup_failed(err: std::io::Error) -> Result<()> {
+    bail!("Failed to remove temporary sudoers file: {}", err);
+}
 
-    let shell_dst = format!("{}/.config/shell", user_home);
-    fs::create_dir_all(&shell_dst)?;
+#[cfg(test)]
+mod tests {
+    use super::{parse_requirements, set_hypr_keymap};
 
-    // Clone the shell repository from the user's GitHub.
-    // The repo is expected to be at: https://github.com/manpreet113/shell
-    // If unavailable at install time, the user can re-run after first boot.
-    let clone_result = run_command(
-        "git",
-        &[
-            "clone",
-            "--depth=1",
-            "https://github.com/manpreet113/shell.git",
-            &shell_dst,
-        ],
-    );
+    #[test]
+    fn parses_requirements_and_normalizes_known_aliases() {
+        let parsed = parse_requirements(
+            r#"
+            quickshell
+            python3
+            # comment
 
-    if let Err(e) = clone_result {
-        println!("  ! Shell clone failed ({}). Skipping — install manually after first boot.", e);
-        println!("  !   git clone https://github.com/manpreet113/shell.git ~/.config/shell");
-    } else {
-        // Make wallpaper script executable
-        let wallpaper_script = format!("{}/scripts/wallpaper.sh", shell_dst);
-        if Path::new(&wallpaper_script).exists() {
-            run_command("chmod", &["+x", &wallpaper_script])?;
-        }
+            nm-connection-editor
+            fonts-inter
+            fonts-roboto-mono
+            python3
+            "#,
+        );
 
-        // Create the colors directory so Matugen has somewhere to write
-        fs::create_dir_all(format!("{}/.config/shell", user_home))?;
-
-        run_command(
-            "chown",
-            &[
-                "-R",
-                &format!("{}:{}", config.username, config.username),
-                &shell_dst,
-            ],
-        )?;
-
-        println!("  > Shell config installed at ~/.config/shell");
+        assert_eq!(
+            parsed,
+            vec![
+                "quickshell",
+                "python",
+                "network-manager-applet",
+                "ttf-inter",
+                "ttf-roboto-mono",
+            ]
+        );
     }
 
-    Ok(())
+    #[test]
+    fn rewrites_hypr_keymap_in_place() {
+        let updated = set_hypr_keymap(
+            "input {\n    kb_layout    = us\n    follow_mouse = 1\n}\n",
+            "de",
+        );
+
+        assert!(updated.contains("kb_layout    = de"));
+        assert!(!updated.contains("kb_layout    = us"));
+    }
 }

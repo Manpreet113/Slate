@@ -155,7 +155,12 @@ pub fn list_timezones() -> Result<Vec<String>> {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
 
             // Skip non-timezone files/folders
-            if name.starts_with('.') || name == "posix" || name == "right" || name == "Etc" || name.ends_with(".tab") {
+            if name.starts_with('.')
+                || name == "posix"
+                || name == "right"
+                || name == "Etc"
+                || name.ends_with(".tab")
+            {
                 continue;
             }
 
