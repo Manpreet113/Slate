@@ -1,5 +1,5 @@
 mod commands;
-mod preflight;
+mod installer;
 mod system;
 mod tui;
 

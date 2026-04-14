@@ -2,23 +2,17 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::Path;
 
-/// Find the root device using /proc/mounts (no findmnt)
-pub fn get_root_device() -> Result<String> {
+pub fn find_mount_source(mount_point: &str) -> Result<Option<String>> {
     let mounts = fs::read_to_string("/proc/mounts").context("Failed to read /proc/mounts")?;
 
     for line in mounts.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let device = parts[0];
-            let mount_point = parts[1];
-
-            if mount_point == "/" {
-                return Ok(device.to_string());
-            }
+        if parts.len() >= 2 && parts[1] == mount_point {
+            return Ok(Some(parts[0].to_string()));
         }
     }
 
-    bail!("Could not identify root filesystem in /proc/mounts")
+    Ok(None)
 }
 
 /// Extract filesystem/LUKS UUID by scanning /dev/disk/by-uuid/
@@ -49,6 +43,14 @@ pub fn get_uuid(device_path: &str) -> Result<String> {
     }
 
     bail!("Could not find UUID for device {}", device_path)
+}
+
+pub fn partition_path(device: &str, part_num: u32) -> String {
+    if device.contains("nvme") || device.contains("mmcblk") {
+        format!("{}p{}", device, part_num)
+    } else {
+        format!("{}{}", device, part_num)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -178,4 +180,19 @@ pub fn list_timezones() -> Result<Vec<String>> {
     let _ = collect_zones(base_path, base_path, &mut zones);
     zones.sort();
     Ok(zones)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::partition_path;
+
+    #[test]
+    fn partition_path_handles_standard_disks() {
+        assert_eq!(partition_path("/dev/sda", 2), "/dev/sda2");
+    }
+
+    #[test]
+    fn partition_path_handles_nvme_disks() {
+        assert_eq!(partition_path("/dev/nvme0n1", 2), "/dev/nvme0n1p2");
+    }
 }

@@ -1,25 +1,27 @@
-use crate::system::{self, BlockDevice};
+use crate::installer::{self, EventSink, InstallEvent, InstallPlan, StageId};
+use crate::system::BlockDevice;
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout, Rect},
-    prelude::Stylize,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use serde::{Deserialize, Serialize};
 use std::io;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const FORM_FIELDS: usize = 9;
+
+#[derive(Clone)]
 pub struct UserInfo {
     pub hostname: String,
     pub username: String,
@@ -44,994 +46,677 @@ impl Default for UserInfo {
     }
 }
 
-pub enum InstallMsg {
-    Log(String),
-    Progress(u16),
-    Finished,
-    Error(String),
+#[derive(Clone)]
+enum SelectorKind {
+    Disk,
+    Keymap,
+    Timezone,
 }
 
-#[derive(PartialEq)]
-pub enum AppState {
-    Welcome,
-    UserSetupKeymap,
-    SelectingDisk,
-    UserSetupTimezone,
-    UserSetupHostname,
-    UserSetupUsername,
-    UserSetupPassword,
-    UserSetupGitName,
-    UserSetupGitEmail,
-    Confirmation,
+enum Screen {
+    Plan,
+    Selector(SelectorKind),
+    Review,
     Installing,
-    Finished,
-    Error(String),
+    Result,
 }
 
-pub struct App {
-    pub state: AppState,
-    pub devices: Vec<BlockDevice>,
-    pub selected_disk: Option<usize>,
-    pub list_state: ListState,
-    pub user_info: UserInfo,
-    pub input: String,
-    pub keymaps: Vec<String>,
-    pub timezones: Vec<String>,
-    pub filtered_items: Vec<String>,
-    pub logs: Vec<String>,
-    pub log_scroll: usize,
-    pub progress: u16,
-    pub rx: Option<Receiver<InstallMsg>>,
+struct App {
+    screen: Screen,
+    selected_field: usize,
+    user_info: UserInfo,
+    devices: Vec<BlockDevice>,
+    selected_disk: usize,
+    keymaps: Vec<String>,
+    timezones: Vec<String>,
+    selector_input: String,
+    selector_state: ListState,
+    logs: Vec<String>,
+    stage_states: Vec<(StageId, StageStatus)>,
+    rx: Option<Receiver<InstallEvent>>,
+    result_message: Option<String>,
+    install_failed: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StageStatus {
+    Pending,
+    Active,
+    Done,
 }
 
 impl App {
-    pub fn new(devices: Vec<BlockDevice>, keymaps: Vec<String>, timezones: Vec<String>) -> Self {
-        let mut list_state = ListState::default();
-        if !devices.is_empty() {
-            list_state.select(Some(0));
-        }
-
+    fn new(devices: Vec<BlockDevice>, keymaps: Vec<String>, timezones: Vec<String>) -> Self {
+        let mut selector_state = ListState::default();
+        selector_state.select(Some(0));
         Self {
-            state: AppState::Welcome,
-            devices,
-            selected_disk: None,
-            list_state,
+            screen: Screen::Plan,
+            selected_field: 0,
             user_info: UserInfo::default(),
-            input: String::new(),
+            devices,
+            selected_disk: 0,
             keymaps,
             timezones,
-            filtered_items: Vec::new(),
-            logs: vec!["[System] App Initialized".to_string()],
-            log_scroll: 0,
-            progress: 0,
+            selector_input: String::new(),
+            selector_state,
+            logs: vec!["Slate installer ready".to_string()],
+            stage_states: StageId::ALL
+                .into_iter()
+                .map(|stage| (stage, StageStatus::Pending))
+                .collect(),
             rx: None,
+            result_message: None,
+            install_failed: false,
         }
     }
 
-    pub fn update_filter(&mut self) {
-        let query = self.input.to_lowercase();
-        let source = match self.state {
-            AppState::UserSetupKeymap => &self.keymaps,
-            AppState::UserSetupTimezone => &self.timezones,
-            _ => return,
+    fn build_plan(&self) -> Result<InstallPlan> {
+        let plan = InstallPlan {
+            disk: self
+                .devices
+                .get(self.selected_disk)
+                .map(|device| device.path.clone())
+                .unwrap_or_default(),
+            hostname: self.user_info.hostname.clone(),
+            username: self.user_info.username.clone(),
+            password: self.user_info.password.clone(),
+            keymap: self.user_info.keymap.clone(),
+            timezone: self.user_info.timezone.clone(),
+            git_name: self.user_info.git_name.clone(),
+            git_email: self.user_info.git_email.clone(),
+            desktop_profile: "Slate".to_string(),
         };
+        plan.validate()?;
+        Ok(plan)
+    }
 
-        self.filtered_items = source
+    fn progress(&self) -> u16 {
+        let completed = self
+            .stage_states
             .iter()
+            .filter(|(_, state)| *state == StageStatus::Done)
+            .count() as u16;
+        completed * 100 / StageId::ALL.len() as u16
+    }
+
+    fn selected_disk_label(&self) -> String {
+        self.devices
+            .get(self.selected_disk)
+            .map(|disk| format!("{}  {}  {}", disk.path, disk.size, disk.model))
+            .unwrap_or_else(|| "No disk".to_string())
+    }
+
+    fn selector_items(&self, kind: &SelectorKind) -> Vec<String> {
+        let query = self.selector_input.to_lowercase();
+        let items: Vec<String> = match kind {
+            SelectorKind::Disk => self
+                .devices
+                .iter()
+                .map(|disk| format!("{}  {}  {}", disk.path, disk.size, disk.model))
+                .collect(),
+            SelectorKind::Keymap => self.keymaps.clone(),
+            SelectorKind::Timezone => self.timezones.clone(),
+        };
+
+        if query.is_empty() {
+            return items;
+        }
+
+        items
+            .into_iter()
             .filter(|item| item.to_lowercase().contains(&query))
-            .cloned()
-            .collect();
-
-        if self.filtered_items.is_empty() {
-            self.list_state.select(None);
-        } else {
-            self.list_state.select(Some(0));
-        }
+            .collect()
     }
 
-    pub fn next_item(&mut self) {
-        let len = match self.state {
-            AppState::SelectingDisk => self.devices.len(),
-            AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
-            _ => 0,
-        };
-
-        if len == 0 {
-            return;
-        }
-
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= len - 1 {
-                    0
+    fn current_stage_label(&self) -> String {
+        self.stage_states
+            .iter()
+            .find_map(|(stage, status)| {
+                if *status == StageStatus::Active {
+                    Some(stage.label().to_string())
                 } else {
-                    i + 1
+                    None
                 }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
-    }
-
-    pub fn previous_item(&mut self) {
-        let len = match self.state {
-            AppState::SelectingDisk => self.devices.len(),
-            AppState::UserSetupKeymap | AppState::UserSetupTimezone => self.filtered_items.len(),
-            _ => 0,
-        };
-
-        if len == 0 {
-            return;
-        }
-
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    len - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
-    }
-
-    fn max_log_scroll(&self) -> usize {
-        self.logs.len().saturating_sub(1)
-    }
-
-    fn scroll_logs_up(&mut self, amount: usize) {
-        self.log_scroll = (self.log_scroll + amount).min(self.max_log_scroll());
-    }
-
-    fn scroll_logs_down(&mut self, amount: usize) {
-        self.log_scroll = self.log_scroll.saturating_sub(amount);
-    }
-
-    fn scroll_logs_home(&mut self) {
-        self.log_scroll = self.max_log_scroll();
-    }
-
-    fn scroll_logs_end(&mut self) {
-        self.log_scroll = 0;
+            })
+            .unwrap_or_else(|| "Idle".to_string())
     }
 }
 
-pub fn run_installer<F>(devices: Vec<BlockDevice>, forge_fn: F) -> Result<()>
-where
-    F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
-{
-    let keymaps = system::list_keymaps().unwrap_or_else(|_| vec!["us".to_string()]);
-    let timezones = system::list_timezones().unwrap_or_else(|_| vec!["UTC".to_string()]);
+pub fn run_installer(devices: Vec<BlockDevice>) -> Result<()> {
+    let keymaps = crate::system::list_keymaps().unwrap_or_else(|_| vec!["us".to_string()]);
+    let timezones = crate::system::list_timezones().unwrap_or_else(|_| vec!["UTC".to_string()]);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(devices, keymaps, timezones);
-    let (tx, rx) = mpsc::channel();
-    app.rx = Some(rx);
-
-    let res = run_loop(&mut terminal, app, tx, Some(forge_fn));
-
+    let result = run_loop(&mut terminal, App::new(devices, keymaps, timezones));
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-
-    res
+    result
 }
 
-fn run_loop<B: Backend, F>(
-    terminal: &mut Terminal<B>,
-    mut app: App,
-    tx: Sender<InstallMsg>,
-    mut forge_fn: Option<F>,
-) -> Result<()>
-where
-    F: FnOnce(BlockDevice, UserInfo, Sender<InstallMsg>) + Send + 'static,
-    B::Error: std::fmt::Display + Send + Sync + 'static,
-{
+fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, mut app: App) -> Result<()> {
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
-
-        if let Some(ref rx) = app.rx {
-            while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    InstallMsg::Log(l) => app.logs.push(l),
-                    InstallMsg::Progress(p) => app.progress = p,
-                    InstallMsg::Finished => app.state = AppState::Finished,
-                    InstallMsg::Error(e) => app.state = AppState::Error(e),
-                }
-            }
-        }
+        drain_events(&mut app);
+        terminal.draw(|frame| render(frame, &mut app))?;
 
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match app.state {
-                    AppState::Welcome => {
-                        if key.code == KeyCode::Enter {
-                            app.state = AppState::UserSetupKeymap;
-                            app.input = String::new();
-                            app.update_filter();
-                        } else if key.code == KeyCode::Char('q') {
-                            return Ok(());
-                        }
-                    }
-                    AppState::UserSetupKeymap => match key.code {
-                        KeyCode::Enter => {
-                            if let Some(i) = app.list_state.selected() {
-                                if let Some(selection) = app.filtered_items.get(i) {
-                                    app.user_info.keymap = selection.clone();
-                                    let _ = std::process::Command::new("loadkeys")
-                                        .arg(&app.user_info.keymap)
-                                        .status();
-                                    app.state = AppState::SelectingDisk;
-                                    app.list_state.select(Some(0));
-                                }
-                            }
-                        }
-                        KeyCode::Down => app.next_item(),
-                        KeyCode::Up => app.previous_item(),
-                        KeyCode::Char(c) => {
-                            app.input.push(c);
-                            app.update_filter();
-                        }
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                            app.update_filter();
-                        }
-                        KeyCode::Esc => app.state = AppState::Welcome,
-                        _ => {}
-                    },
-                    AppState::SelectingDisk => match key.code {
-                        KeyCode::Down => app.next_item(),
-                        KeyCode::Up => app.previous_item(),
-                        KeyCode::Enter => {
-                            if let Some(i) = app.list_state.selected() {
-                                app.selected_disk = Some(i);
-                                app.state = AppState::UserSetupTimezone;
-                                app.input = String::new();
-                                app.update_filter();
-                            }
-                        }
-                        _ => {}
-                    },
-                    AppState::UserSetupTimezone => match key.code {
-                        KeyCode::Enter => {
-                            if let Some(i) = app.list_state.selected() {
-                                if let Some(selection) = app.filtered_items.get(i) {
-                                    app.user_info.timezone = selection.clone();
-                                    app.state = AppState::UserSetupHostname;
-                                    app.input = String::new();
-                                }
-                            }
-                        }
-                        KeyCode::Down => app.next_item(),
-                        KeyCode::Up => app.previous_item(),
-                        KeyCode::Char(c) => {
-                            app.input.push(c);
-                            app.update_filter();
-                        }
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                            app.update_filter();
-                        }
-                        KeyCode::Esc => app.state = AppState::SelectingDisk,
-                        _ => {}
-                    },
-                    AppState::UserSetupHostname => match key.code {
-                        KeyCode::Enter => {
-                            let hostname = app.input.trim().to_string();
-                            if !is_valid_hostname(&hostname) {
-                                app.logs.push("[Err] Invalid hostname. Use letters, digits, and '-' (not at start/end).".to_string());
-                            } else {
-                                app.user_info.hostname = hostname;
-                                app.input.clear();
-                                app.state = AppState::UserSetupUsername;
-                            }
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Esc => app.state = AppState::UserSetupTimezone,
-                        _ => {}
-                    },
-                    AppState::UserSetupUsername => match key.code {
-                        KeyCode::Enter => {
-                            let username = app.input.trim().to_string();
-                            if !is_valid_username(&username) {
-                                app.logs.push("[Err] Invalid username. Use 1-32 chars: lowercase letters, digits, '_' or '-' (must start with lowercase/_).".to_string());
-                            } else {
-                                app.user_info.username = username;
-                                app.input.clear();
-                                app.state = AppState::UserSetupPassword;
-                            }
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Esc => app.state = AppState::UserSetupHostname,
-                        _ => {}
-                    },
-                    AppState::UserSetupPassword => match key.code {
-                        KeyCode::Enter => {
-                            let password = app.input.trim().to_string();
-                            if password.is_empty() {
-                                app.logs.push("[Err] Password cannot be empty.".to_string());
-                            } else {
-                                app.user_info.password = password;
-                                app.input.clear();
-                                app.state = AppState::UserSetupGitName;
-                            }
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Esc => app.state = AppState::UserSetupUsername,
-                        _ => {}
-                    },
-                    AppState::UserSetupGitName => match key.code {
-                        KeyCode::Enter => {
-                            app.user_info.git_name = app.input.drain(..).collect();
-                            app.state = AppState::UserSetupGitEmail;
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Esc => app.state = AppState::UserSetupPassword,
-                        _ => {}
-                    },
-                    AppState::UserSetupGitEmail => match key.code {
-                        KeyCode::Enter => {
-                            app.user_info.git_email = app.input.drain(..).collect();
-                            app.state = AppState::Confirmation;
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Esc => app.state = AppState::UserSetupGitName,
-                        _ => {}
-                    },
-                    AppState::Confirmation => match key.code {
-                        KeyCode::Enter => {
-                            let device = app.devices[app.selected_disk.unwrap()].clone();
-                            let info = app.user_info.clone();
-                            app.state = AppState::Installing;
-                            let tx_clone = tx.clone();
-                            if let Some(f) = forge_fn.take() {
-                                std::thread::spawn(move || {
-                                    f(device, info, tx_clone);
-                                });
-                            }
-                        }
-                        KeyCode::Char('n') | KeyCode::Esc => app.state = AppState::SelectingDisk,
-                        _ => {}
-                    },
-                    AppState::Finished | AppState::Error(_) => {
-                        if key.code == KeyCode::Enter || key.code == KeyCode::Char('q') {
-                            return Ok(());
-                        }
-                    }
-                    AppState::Installing => match key.code {
-                        KeyCode::Up => app.scroll_logs_up(1),
-                        KeyCode::Down => app.scroll_logs_down(1),
-                        KeyCode::PageUp => app.scroll_logs_up(10),
-                        KeyCode::PageDown => app.scroll_logs_down(10),
-                        KeyCode::Home => app.scroll_logs_home(),
-                        KeyCode::End => app.scroll_logs_end(),
-                        _ => {}
-                    },
+            let ev = event::read()?;
+            if let Event::Key(key) = ev {
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
 
-                if key.code == KeyCode::Char('q') && !is_input_state(&app.state) {
-                    return Ok(());
+                match app.screen {
+                    Screen::Plan => handle_plan_keys(&mut app, key.code)?,
+                    Screen::Selector(_) => handle_selector_keys(&mut app, key.code),
+                    Screen::Review => handle_review_keys(&mut app, key.code)?,
+                    Screen::Installing => handle_installing_keys(&mut app, key.code),
+                    Screen::Result => {
+                        if matches!(key.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if matches!(app.screen, Screen::Result) && app.result_message.is_some() {
+            continue;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_plan_keys(app: &mut App, code: KeyCode) -> Result<()> {
+    match code {
+        KeyCode::Up => {
+            if app.selected_field == 0 {
+                app.selected_field = FORM_FIELDS - 1;
+            } else {
+                app.selected_field -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            app.selected_field = (app.selected_field + 1) % FORM_FIELDS;
+        }
+        KeyCode::Enter => match app.selected_field {
+            0 => enter_selector(app, SelectorKind::Disk),
+            4 => enter_selector(app, SelectorKind::Keymap),
+            5 => enter_selector(app, SelectorKind::Timezone),
+            8 => {
+                app.build_plan()?;
+                app.screen = Screen::Review;
+            }
+            _ => {}
+        },
+        KeyCode::Backspace => {
+            if let Some(field) = current_text_field_mut(app) {
+                field.pop();
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('q') => std::process::exit(0),
+        KeyCode::Char(ch) => {
+            if let Some(field) = current_text_field(app) {
+                if !field.read_only {
+                    if let Some(text) = current_text_field_mut(app) {
+                        text.push(ch);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_selector_keys(app: &mut App, code: KeyCode) {
+    let kind = match &app.screen {
+        Screen::Selector(kind) => kind.clone(),
+        _ => return,
+    };
+
+    let items = app.selector_items(&kind);
+    match code {
+        KeyCode::Esc => {
+            app.screen = Screen::Plan;
+            app.selector_input.clear();
+        }
+        KeyCode::Up => {
+            let next = app.selector_state.selected().unwrap_or(0).saturating_sub(1);
+            app.selector_state.select(Some(next));
+        }
+        KeyCode::Down => {
+            let max_index = items.len().saturating_sub(1);
+            let next = (app.selector_state.selected().unwrap_or(0) + 1).min(max_index);
+            app.selector_state.select(Some(next));
+        }
+        KeyCode::Backspace => {
+            app.selector_input.pop();
+            app.selector_state.select(Some(0));
+        }
+        KeyCode::Char(ch) => {
+            app.selector_input.push(ch);
+            app.selector_state.select(Some(0));
+        }
+        KeyCode::Enter => {
+            let index = app.selector_state.selected().unwrap_or(0);
+            if let Some(value) = items.get(index) {
+                match kind {
+                    SelectorKind::Disk => {
+                        if let Some(device_index) = app
+                            .devices
+                            .iter()
+                            .position(|disk| value.starts_with(&disk.path))
+                        {
+                            app.selected_disk = device_index;
+                        }
+                    }
+                    SelectorKind::Keymap => app.user_info.keymap = value.clone(),
+                    SelectorKind::Timezone => app.user_info.timezone = value.clone(),
+                }
+                app.screen = Screen::Plan;
+                app.selector_input.clear();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_review_keys(app: &mut App, code: KeyCode) -> Result<()> {
+    match code {
+        KeyCode::Esc => app.screen = Screen::Plan,
+        KeyCode::Enter => {
+            let plan = app.build_plan()?;
+            let (tx, rx) = mpsc::channel();
+            app.rx = Some(rx);
+            app.logs.clear();
+            app.logs.push("Starting install...".to_string());
+            reset_stage_states(app);
+            app.screen = Screen::Installing;
+            thread::spawn(move || installer::run_install(plan, EventSink::new(tx)));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_installing_keys(app: &mut App, code: KeyCode) {
+    if matches!(code, KeyCode::Char('q')) {
+        app.logs
+            .push("Install is running. Wait for completion before exiting.".to_string());
+    }
+}
+
+fn drain_events(app: &mut App) {
+    if let Some(rx) = &app.rx {
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                InstallEvent::Log(line) => app.logs.push(line),
+                InstallEvent::StageStarted(stage) => {
+                    for (_, status) in &mut app.stage_states {
+                        if *status == StageStatus::Active {
+                            *status = StageStatus::Done;
+                        }
+                    }
+                    if let Some((_, status)) =
+                        app.stage_states.iter_mut().find(|(id, _)| *id == stage)
+                    {
+                        *status = StageStatus::Active;
+                    }
+                }
+                InstallEvent::StageFinished(stage) => {
+                    if let Some((_, status)) =
+                        app.stage_states.iter_mut().find(|(id, _)| *id == stage)
+                    {
+                        *status = StageStatus::Done;
+                    }
+                }
+                InstallEvent::Failed { stage, message } => {
+                    app.install_failed = true;
+                    app.result_message = Some(match stage {
+                        Some(stage) => format!("{}: {}", stage.label(), message),
+                        None => message,
+                    });
+                    app.screen = Screen::Result;
+                }
+                InstallEvent::Finished => {
+                    app.install_failed = false;
+                    app.result_message = Some("Install completed successfully.".to_string());
+                    app.screen = Screen::Result;
                 }
             }
         }
     }
 }
 
-fn is_input_state(state: &AppState) -> bool {
-    matches!(
-        state,
-        AppState::UserSetupKeymap
-            | AppState::UserSetupTimezone
-            | AppState::UserSetupHostname
-            | AppState::UserSetupUsername
-            | AppState::UserSetupPassword
-            | AppState::UserSetupGitName
-            | AppState::UserSetupGitEmail
-    )
-}
+fn render(frame: &mut Frame<'_>, app: &mut App) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Slate ")
+        .border_style(Style::default().fg(Color::Rgb(120, 135, 150)));
+    frame.render_widget(block, area);
 
-fn is_valid_hostname(value: &str) -> bool {
-    if value.is_empty() || value.len() > 63 {
-        return false;
-    }
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
 
-    if value.starts_with('-') || value.ends_with('-') {
-        return false;
-    }
-
-    value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
-
-fn is_valid_username(value: &str) -> bool {
-    if value.is_empty() || value.len() > 32 {
-        return false;
-    }
-
-    let mut chars = value.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return false,
+    let selector_kind = match &app.screen {
+        Screen::Selector(kind) => Some(kind.clone()),
+        _ => None,
     };
 
-    if !(first.is_ascii_lowercase() || first == '_') {
-        return false;
-    }
-
-    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
-}
-
-#[derive(Clone, Copy)]
-struct UiTheme {
-    accent: Color,
-    accent_soft: Color,
-    border: Color,
-    muted: Color,
-    success: Color,
-    error: Color,
-    selection_bg: Color,
-}
-
-impl Default for UiTheme {
-    fn default() -> Self {
-        Self {
-            accent: Color::Cyan,
-            accent_soft: Color::LightBlue,
-            border: Color::DarkGray,
-            muted: Color::Gray,
-            success: Color::Green,
-            error: Color::Red,
-            selection_bg: Color::DarkGray,
+    match selector_kind {
+        Some(kind) => {
+            render_plan(frame, inner, app);
+            render_selector(frame, inner, app, &kind);
         }
+        None => match &app.screen {
+            Screen::Plan => render_plan(frame, inner, app),
+            Screen::Review => render_review(frame, inner, app),
+            Screen::Installing => render_installing(frame, inner, app),
+            Screen::Result => render_result(frame, inner, app),
+            Screen::Selector(_) => {}
+        },
     }
 }
 
-fn current_step(state: &AppState) -> (&'static str, u16, u16) {
-    let total = 8;
-    match state {
-        AppState::Welcome | AppState::UserSetupKeymap => ("Keymap", 1, total),
-        AppState::SelectingDisk => ("Disk", 2, total),
-        AppState::UserSetupTimezone => ("Timezone", 3, total),
-        AppState::UserSetupHostname => ("Hostname", 4, total),
-        AppState::UserSetupUsername => ("Username", 5, total),
-        AppState::UserSetupPassword | AppState::UserSetupGitName | AppState::UserSetupGitEmail => {
-            ("Credentials", 6, total)
-        }
-        AppState::Confirmation => ("Confirm", 7, total),
-        AppState::Installing | AppState::Finished | AppState::Error(_) => ("Install", 8, total),
-    }
-}
-
-fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let count = input.chars().count();
-    if count <= max_chars {
-        return input.to_string();
-    }
-    if max_chars <= 1 {
-        return "...".chars().take(max_chars).collect();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let mut out: String = input.chars().take(keep).collect();
-    out.push('…');
-    out
-}
-
-fn help_text_for_state(state: &AppState) -> &'static str {
-    match state {
-        AppState::Welcome => "Enter: Begin | q: Quit",
-        AppState::SelectingDisk | AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
-            "Up/Down: Move | Enter: Select | Esc: Back | q: Quit"
-        }
-        AppState::UserSetupHostname
-        | AppState::UserSetupUsername
-        | AppState::UserSetupPassword
-        | AppState::UserSetupGitName
-        | AppState::UserSetupGitEmail => {
-            "Type: Input | Backspace: Delete | Enter: Continue | Esc: Back"
-        }
-        AppState::Confirmation => "Enter: Install | Esc/N: Back | q: Quit",
-        AppState::Installing => {
-            "Up/Down: Scroll logs | PgUp/PgDn: Faster | Home/End: Oldest/Latest"
-        }
-        AppState::Finished | AppState::Error(_) => "Enter/q: Exit",
-    }
-}
-
-fn ui(f: &mut Frame, app: &mut App) {
-    let theme = UiTheme::default();
-    let size = f.area();
-    f.render_widget(Clear, size);
-    let chunks = Layout::default()
+fn render_plan(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App) {
+    let rows = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
             Constraint::Length(3),
         ])
-        .split(size);
+        .split(area);
 
-    let header_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(chunks[0]);
-
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "SLATE",
+    let header = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "One-pass Arch + Slate desktop install",
             Style::default()
-                .fg(theme.accent)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Full-disk wipe only. Enter opens selectors. Tab moves forward.",
+            Style::default().fg(Color::Rgb(160, 170, 180)),
+        )),
+    ]);
+    frame.render_widget(header, rows[0]);
+
+    let disk_label = app.selected_disk_label();
+    let password_mask = "*".repeat(app.user_info.password.chars().count());
+    let items = vec![
+        field_line("Disk", &disk_label, app.selected_field == 0),
+        field_line("Hostname", &app.user_info.hostname, app.selected_field == 1),
+        field_line("Username", &app.user_info.username, app.selected_field == 2),
+        field_line("Password", &password_mask, app.selected_field == 3),
+        field_line("Keymap", &app.user_info.keymap, app.selected_field == 4),
+        field_line("Timezone", &app.user_info.timezone, app.selected_field == 5),
+        field_line("Git Name", &app.user_info.git_name, app.selected_field == 6),
+        field_line(
+            "Git Email",
+            &app.user_info.git_email,
+            app.selected_field == 7,
         ),
-        Span::styled(
-            "  ARCH LINUX INSTALLER",
-            Style::default().fg(theme.accent_soft),
+        field_line(
+            "Continue",
+            "Review destructive summary",
+            app.selected_field == 8,
         ),
-    ]))
-    .block(
+    ];
+    let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border)),
-    )
-    .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(title, header_chunks[0]);
+            .title(" Plan ")
+            .border_style(Style::default().fg(Color::Rgb(120, 135, 150))),
+    );
+    frame.render_widget(list, rows[1]);
 
-    let (step_name, step_idx, step_total) = current_step(&app.state);
-    let step_percent = (step_idx * 100 / step_total) as u16;
-    let step = Gauge::default()
-        .block(
+    let footer = Paragraph::new("Up/Down: move  Enter: select/open  Esc: quit")
+        .style(Style::default().fg(Color::Rgb(150, 160, 170)));
+    frame.render_widget(footer, rows[2]);
+}
+
+fn render_selector(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    app: &mut App,
+    kind: &SelectorKind,
+) {
+    let popup = centered_rect(area, 70, 70);
+    frame.render_widget(Clear, popup);
+    let items = app.selector_items(kind);
+    let list_items: Vec<ListItem<'_>> = items
+        .iter()
+        .map(|item| ListItem::new(item.as_str()))
+        .collect();
+    let title = match kind {
+        SelectorKind::Disk => "Select Disk",
+        SelectorKind::Keymap => "Select Keymap",
+        SelectorKind::Timezone => "Select Timezone",
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .split(popup);
+    frame.render_widget(
+        Paragraph::new(format!("Filter: {}", app.selector_input)).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title("Setup Progress".fg(theme.accent).bold()),
+                .title(title)
+                .border_style(Style::default().fg(Color::Rgb(220, 180, 90))),
+        ),
+        layout[0],
+    );
+    let list = List::new(list_items)
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(40, 58, 74))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )
-        .percent(step_percent)
-        .label(format!("STEP {}/{} {}", step_idx, step_total, step_name))
-        .gauge_style(Style::default().fg(theme.accent));
-    f.render_widget(step, header_chunks[1]);
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_stateful_widget(list, layout[1], &mut app.selector_state);
+}
 
-    // Clear body area every frame to avoid stale glyph artifacts when switching
-    // between states with very different layouts.
-    f.render_widget(Clear, chunks[1]);
+fn render_review(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App) {
+    let text = vec![
+        Line::from(Span::styled(
+            "This will wipe the selected disk.",
+            Style::default()
+                .fg(Color::Rgb(230, 110, 90))
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Disk: {}", app.selected_disk_label())),
+        Line::from("Layout: 1G EFI + remaining Btrfs with @, @home, @log, @pkg, @snapshots"),
+        Line::from(format!("Hostname: {}", app.user_info.hostname)),
+        Line::from(format!("User: {}", app.user_info.username)),
+        Line::from(format!("Keymap: {}", app.user_info.keymap)),
+        Line::from(format!("Timezone: {}", app.user_info.timezone)),
+        Line::from("Desktop: Slate (Hyprland + shell assets)"),
+        Line::from(""),
+        Line::from("Enter to start install. Esc to go back."),
+    ];
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title(" Review "))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
 
-    match &app.state {
-        AppState::Welcome => {
-            let p = Paragraph::new("Welcome to Slate!\n\nThis will install Arch Linux with the Slate Hyprland shell.\n\nPress Enter to begin.")
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title("Welcome".fg(theme.accent).bold())
-                );
-            f.render_widget(p, chunks[1]);
-        }
-        AppState::SelectingDisk => {
-            let available = chunks[1].width.saturating_sub(10) as usize;
-            let model_max = available.saturating_sub(26).max(10);
-            let items: Vec<ListItem> = app
-                .devices
-                .iter()
-                .map(|d| {
-                    let model = truncate_with_ellipsis(&d.model, model_max);
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!("{:<14}", d.path),
-                            Style::default()
-                                .fg(theme.accent)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{:>8}", d.size),
-                            Style::default().fg(theme.accent_soft),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(model, Style::default().fg(theme.muted)),
-                    ]))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title("Select Disk".fg(theme.accent).bold()),
-                )
-                .highlight_symbol("▶ ")
-                .highlight_style(
-                    Style::default()
-                        .fg(theme.accent)
-                        .bg(theme.selection_bg)
-                        .add_modifier(Modifier::BOLD),
-                );
-            f.render_stateful_widget(list, chunks[1], &mut app.list_state);
-        }
-        AppState::UserSetupKeymap | AppState::UserSetupTimezone => {
-            let prompt = if app.state == AppState::UserSetupKeymap {
-                "Search Keymap:"
-            } else {
-                "Search Timezone:"
+fn render_installing(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
+        .split(area);
+    let upper = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(28), Constraint::Min(20)])
+        .split(layout[0]);
+
+    let stage_items: Vec<ListItem<'_>> = app
+        .stage_states
+        .iter()
+        .map(|(stage, status)| {
+            let marker = match status {
+                StageStatus::Pending => "·",
+                StageStatus::Active => ">",
+                StageStatus::Done => "✓",
             };
-            let sub_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(5)])
-                .split(chunks[1]);
-
-            let search_p = Paragraph::new(app.input.clone()).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title(prompt.fg(theme.accent).bold()),
-            );
-            f.render_widget(search_p, sub_chunks[0]);
-
-            let items: Vec<ListItem> = app
-                .filtered_items
-                .iter()
-                .map(|i| ListItem::new(i.as_str()))
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title("Results".fg(theme.accent).bold()),
-                )
-                .highlight_symbol("▶ ")
-                .highlight_style(
-                    Style::default()
-                        .fg(theme.accent)
-                        .bg(theme.selection_bg)
-                        .add_modifier(Modifier::BOLD),
-                );
-            f.render_stateful_widget(list, sub_chunks[1], &mut app.list_state);
-        }
-        AppState::UserSetupHostname
-        | AppState::UserSetupUsername
-        | AppState::UserSetupPassword
-        | AppState::UserSetupGitName
-        | AppState::UserSetupGitEmail => {
-            let prompt = match app.state {
-                AppState::UserSetupHostname => "Hostname:",
-                AppState::UserSetupUsername => "Username:",
-                AppState::UserSetupPassword => "Password:",
-                AppState::UserSetupGitName => "Git Username (Optional):",
-                AppState::UserSetupGitEmail => "Git Email (Optional):",
-                _ => "",
+            let style = match status {
+                StageStatus::Pending => Style::default().fg(Color::Rgb(140, 150, 160)),
+                StageStatus::Active => Style::default()
+                    .fg(Color::Rgb(230, 190, 95))
+                    .add_modifier(Modifier::BOLD),
+                StageStatus::Done => Style::default().fg(Color::Rgb(120, 190, 130)),
             };
-            let text = if app.state == AppState::UserSetupPassword {
-                "*".repeat(app.input.len())
-            } else {
-                app.input.clone()
-            };
-            let sub_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Min(1),
-                ])
-                .split(chunks[1]);
-
-            let p = Paragraph::new(text).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title(prompt.fg(theme.accent).bold()),
-            );
-            f.render_widget(p, sub_chunks[0]);
-
-            let trimmed = app.input.trim();
-            let (status, status_style) = match app.state {
-                AppState::UserSetupHostname => {
-                    if trimmed.is_empty() {
-                        (
-                            "Required: letters, digits, '-' (not at start/end)",
-                            Style::default().fg(theme.muted),
-                        )
-                    } else if is_valid_hostname(trimmed) {
-                        (
-                            "Valid hostname",
-                            Style::default()
-                                .fg(theme.success)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        (
-                            "Invalid hostname format",
-                            Style::default()
-                                .fg(theme.error)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    }
-                }
-                AppState::UserSetupUsername => {
-                    if trimmed.is_empty() {
-                        (
-                            "Required: starts with lowercase/_; then lowercase, digits, '_' or '-'",
-                            Style::default().fg(theme.muted),
-                        )
-                    } else if is_valid_username(trimmed) {
-                        (
-                            "Valid username",
-                            Style::default()
-                                .fg(theme.success)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        (
-                            "Invalid username format",
-                            Style::default()
-                                .fg(theme.error)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    }
-                }
-                AppState::UserSetupPassword => {
-                    if trimmed.is_empty() {
-                        (
-                            "Password is required",
-                            Style::default()
-                                .fg(theme.error)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        (
-                            "Password set",
-                            Style::default()
-                                .fg(theme.success)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    }
-                }
-                AppState::UserSetupGitName | AppState::UserSetupGitEmail => {
-                    if trimmed.is_empty() {
-                        (
-                            "Optional: press Enter to skip",
-                            Style::default().fg(theme.muted),
-                        )
-                    } else {
-                        (
-                            "Value captured",
-                            Style::default()
-                                .fg(theme.success)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    }
-                }
-                _ => ("", Style::default().fg(theme.muted)),
-            };
-
-            let status_panel = Paragraph::new(Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(theme.muted)),
-                Span::styled(status, status_style),
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{marker} "), style),
+                Span::styled(stage.label(), style),
             ]))
+        })
+        .collect();
+
+    frame.render_widget(
+        List::new(stage_items).block(Block::default().borders(Borders::ALL).title(" Stages ")),
+        upper[0],
+    );
+
+    let log_lines: Vec<Line<'_>> = app
+        .logs
+        .iter()
+        .rev()
+        .take((upper[1].height as usize).saturating_sub(2))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(Line::from)
+        .collect();
+    frame.render_widget(
+        Paragraph::new(log_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Logs "))
+            .wrap(Wrap { trim: false }),
+        upper[1],
+    );
+
+    let gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(" Progress "))
+        .gauge_style(
+            Style::default()
+                .fg(Color::Rgb(210, 170, 85))
+                .bg(Color::Rgb(36, 42, 48)),
+        )
+        .percent(app.progress())
+        .label(app.current_stage_label());
+    frame.render_widget(gauge, layout[1]);
+}
+
+fn render_result(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App) {
+    let title = if app.install_failed {
+        " Failed "
+    } else {
+        " Complete "
+    };
+    let color = if app.install_failed {
+        Color::Rgb(230, 110, 90)
+    } else {
+        Color::Rgb(120, 190, 130)
+    };
+    frame.render_widget(
+        Paragraph::new(app.result_message.clone().unwrap_or_default())
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("Validation".fg(theme.accent).bold()),
+                    .title(title)
+                    .border_style(Style::default().fg(color)),
             )
-            .wrap(Wrap { trim: true });
-            f.render_widget(status_panel, sub_chunks[1]);
-        }
-        AppState::Confirmation => {
-            let panel = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title("Final Confirmation".fg(theme.accent).bold());
-            let inner = panel.inner(chunks[1]);
-            f.render_widget(panel, chunks[1]);
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
 
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(22), Constraint::Min(20)])
-                .split(inner);
+fn field_line<'a>(label: &'a str, value: &'a str, selected: bool) -> ListItem<'a> {
+    let style = if selected {
+        Style::default()
+            .bg(Color::Rgb(40, 58, 74))
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Rgb(205, 210, 215))
+    };
+    ListItem::new(Line::from(vec![
+        Span::styled(format!("{label:<10} "), style),
+        Span::styled(value, style),
+    ]))
+}
 
-            let labels = Paragraph::new(vec![
-                Line::from(Span::styled("Disk", Style::default().fg(theme.muted))),
-                Line::from(Span::styled("Keymap", Style::default().fg(theme.muted))),
-                Line::from(Span::styled("Timezone", Style::default().fg(theme.muted))),
-                Line::from(Span::styled("Hostname", Style::default().fg(theme.muted))),
-                Line::from(Span::styled("User", Style::default().fg(theme.muted))),
-                Line::from(""),
-                Line::from(Span::styled("Desktop", Style::default().fg(theme.muted))),
-                Line::from(Span::styled("Git Config", Style::default().fg(theme.muted))),
-                Line::from(""),
-                Line::from(Span::styled("Action", Style::default().fg(theme.muted))),
-            ])
-            .wrap(Wrap { trim: true });
+struct FieldMeta {
+    read_only: bool,
+}
 
-            let disk_value = app
-                .selected_disk
-                .and_then(|i| app.devices.get(i))
-                .map(|d| d.path.clone())
-                .unwrap_or_else(|| "(none)".to_string());
-            let git_value =
-                if app.user_info.git_name.is_empty() || app.user_info.git_email.is_empty() {
-                    "Skipped".to_string()
-                } else {
-                    format!("{} <{}>", app.user_info.git_name, app.user_info.git_email)
-                };
-
-            let values = Paragraph::new(vec![
-                Line::from(Span::styled(
-                    disk_value,
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::raw(app.user_info.keymap.clone())),
-                Line::from(Span::raw(app.user_info.timezone.clone())),
-                Line::from(Span::raw(app.user_info.hostname.clone())),
-                Line::from(Span::raw(app.user_info.username.clone())),
-                Line::from(""),
-                Line::from(Span::raw("Slate Shell + Hyprland + Zsh")),
-                Line::from(Span::raw(git_value)),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Press Enter to CONFIRM and INSTALL",
-                    Style::default()
-                        .fg(theme.accent_soft)
-                        .add_modifier(Modifier::BOLD),
-                )),
-            ])
-            .wrap(Wrap { trim: true });
-
-            f.render_widget(labels, cols[0]);
-            f.render_widget(values, cols[1]);
-        }
-        AppState::Installing | AppState::Finished => {
-            let install_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(5)])
-                .split(chunks[1]);
-
-            let status_title = if app.state == AppState::Finished {
-                "INSTALLATION COMPLETE!"
-            } else {
-                "Installing..."
-            };
-            let gauge = Gauge::default()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title(status_title.fg(theme.accent).bold()),
-                )
-                .percent(app.progress)
-                .gauge_style(if app.state == AppState::Finished {
-                    Style::default().fg(theme.success)
-                } else {
-                    Style::default().fg(theme.accent)
-                });
-            f.render_widget(gauge, install_chunks[0]);
-
-            let view_height = install_chunks[1].height.saturating_sub(2) as usize;
-            let log_window = view_height.max(1);
-            let end = app.logs.len().saturating_sub(app.log_scroll);
-            let start = end.saturating_sub(log_window);
-            let visible_logs = &app.logs[start..end];
-
-            let log_lines: Vec<Line> = visible_logs
-                .iter()
-                .map(|l| {
-                    let lower = l.to_ascii_lowercase();
-                    let style = if l.starts_with("[Err]") || lower.starts_with("error") {
-                        Style::default()
-                            .fg(theme.error)
-                            .add_modifier(Modifier::BOLD)
-                    } else if lower.contains("warn") {
-                        Style::default().fg(Color::Yellow)
-                    } else if l.starts_with("$ ") {
-                        Style::default().fg(theme.accent_soft)
-                    } else {
-                        Style::default().fg(theme.muted)
-                    };
-                    Line::from(Span::styled(l.clone(), style))
-                })
-                .collect();
-            let logs_title = if app.log_scroll == 0 {
-                "Logs (latest)".to_string()
-            } else {
-                format!("Logs (scroll +{})", app.log_scroll)
-            };
-            let p = Paragraph::new(log_lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title(logs_title.fg(theme.accent).bold()),
-                )
-                .wrap(Wrap { trim: false });
-            f.render_widget(p, install_chunks[1]);
-
-            if app.state == AppState::Finished {
-                let overlay = Rect::new(
-                    size.width / 4,
-                    size.height / 3,
-                    size.width / 2,
-                    size.height / 3,
-                );
-                f.render_widget(Clear, overlay);
-                let p = Paragraph::new("\nSUCCESS\n\nInstallation Finished.\nYou can now reboot.\n\nPress Enter or 'q' to exit.")
-                    .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.success)).title("Done".fg(theme.success).bold()))
-                    .alignment(ratatui::layout::Alignment::Center);
-                f.render_widget(p, overlay);
-            }
-        }
-        AppState::Error(e) => {
-            let err_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(4), Constraint::Min(5)])
-                .split(chunks[1]);
-
-            let summary =
-                Paragraph::new("Installer failed. See details below and press Enter to exit.")
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.error))
-                            .title("Installer Error".fg(theme.error).bold()),
-                    )
-                    .wrap(Wrap { trim: true })
-                    .style(
-                        Style::default()
-                            .fg(theme.error)
-                            .add_modifier(Modifier::BOLD),
-                    );
-            f.render_widget(summary, err_chunks[0]);
-
-            let detail = Paragraph::new(e.as_str())
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border))
-                        .title("Details".fg(theme.accent).bold()),
-                )
-                .wrap(Wrap { trim: false })
-                .style(Style::default().fg(theme.muted));
-            f.render_widget(detail, err_chunks[1]);
-        }
+fn current_text_field(app: &App) -> Option<FieldMeta> {
+    match app.selected_field {
+        1 | 2 | 3 | 6 | 7 => Some(FieldMeta { read_only: false }),
+        0 | 4 | 5 | 8 => Some(FieldMeta { read_only: true }),
+        _ => None,
     }
+}
 
-    let help = Paragraph::new(help_text_for_state(&app.state))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title("Keys".fg(theme.accent).bold()),
-        )
-        .style(Style::default().fg(theme.muted))
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(help, chunks[2]);
+fn current_text_field_mut(app: &mut App) -> Option<&mut String> {
+    match app.selected_field {
+        1 => Some(&mut app.user_info.hostname),
+        2 => Some(&mut app.user_info.username),
+        3 => Some(&mut app.user_info.password),
+        6 => Some(&mut app.user_info.git_name),
+        7 => Some(&mut app.user_info.git_email),
+        _ => None,
+    }
+}
+
+fn enter_selector(app: &mut App, kind: SelectorKind) {
+    app.selector_input.clear();
+    app.selector_state.select(Some(0));
+    app.screen = Screen::Selector(kind);
+}
+
+fn reset_stage_states(app: &mut App) {
+    for (_, status) in &mut app.stage_states {
+        *status = StageStatus::Pending;
+    }
+    app.result_message = None;
+    app.install_failed = false;
+}
+
+fn centered_rect(
+    area: ratatui::layout::Rect,
+    width_pct: u16,
+    height_pct: u16,
+) -> ratatui::layout::Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_pct) / 2),
+            Constraint::Percentage(height_pct),
+            Constraint::Percentage((100 - height_pct) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_pct) / 2),
+            Constraint::Percentage(width_pct),
+            Constraint::Percentage((100 - width_pct) / 2),
+        ])
+        .split(vertical[1])[1]
 }
