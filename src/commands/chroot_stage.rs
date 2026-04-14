@@ -19,6 +19,7 @@ pub fn chroot_stage() -> Result<()> {
         fs::read_to_string(user_info_path).context("Failed to read user_info.json in chroot")?;
     let user_info: UserInfo = serde_json::from_str(&user_info_content)?;
 
+    setup_fast_downloads()?;
     configure_base(&user_info)?;
     configure_user(&user_info)?;
     configure_shell(&user_info)?;
@@ -54,6 +55,35 @@ fn configure_base(config: &UserInfo) -> Result<()> {
     fs::write("/etc/locale.conf", "LANG=en_US.UTF-8\n")?;
     fs::write("/etc/vconsole.conf", format!("KEYMAP={}\n", config.keymap))?;
     run_command("hwclock", &["--systohc"])?;
+
+    Ok(())
+}
+
+fn setup_fast_downloads() -> Result<()> {
+    let pacman_conf = "/etc/pacman.conf";
+    if !Path::new(pacman_conf).exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(pacman_conf)?;
+    let mut updated = content.clone();
+
+    if content.contains("#ParallelDownloads") {
+        updated = updated.replace("#ParallelDownloads", "ParallelDownloads");
+    } else if !content.contains("ParallelDownloads") {
+        // Try to insert after [options]
+        if let Some(pos) = content.find("[options]") {
+            if let Some(line_end) = content[pos..].find('\n') {
+                updated.insert_str(pos + line_end + 1, "ParallelDownloads = 5\n");
+            }
+        } else {
+            updated.push_str("\nParallelDownloads = 5\n");
+        }
+    }
+
+    if updated != content {
+        fs::write(pacman_conf, updated)?;
+    }
 
     Ok(())
 }

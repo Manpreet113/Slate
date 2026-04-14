@@ -76,6 +76,7 @@ fn check_tools() -> Result<()> {
         "mkinitcpio",
         "bootctl",
         "curl",
+        "reflector",
     ];
     let mut missing = Vec::new();
     for tool in tools {

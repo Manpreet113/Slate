@@ -41,6 +41,10 @@ fn background_installer(device: system::BlockDevice, user_info: UserInfo, tx: Se
             tx.send(InstallMsg::Log(log))?;
         }
         tx.send(InstallMsg::Progress(10))?;
+        
+        // 1.5 Optimize Mirrors & Pacman
+        optimize_mirrors(&tx)?;
+        tx.send(InstallMsg::Progress(15))?;
 
         // 2. Partitioning
         tx.send(InstallMsg::Log("Partitioning disk...".to_string()))?;
@@ -408,4 +412,44 @@ fn resolve_partition(device: &str, part_num: i32) -> String {
     } else {
         format!("{}{}", device, part_num)
     }
+}
+
+fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
+    tx.send(InstallMsg::Log(
+        "Optimizing Mirrors & Pacman...".to_string(),
+    ))?;
+
+    // Enable ParallelDownloads in host if not already enabled
+    let pacman_conf = "/etc/pacman.conf";
+    if Path::new(pacman_conf).exists() {
+        let content = fs::read_to_string(pacman_conf)?;
+        let mut updated = content.clone();
+        if content.contains("#ParallelDownloads") {
+            updated = updated.replace("#ParallelDownloads", "ParallelDownloads");
+        } else if !content.contains("ParallelDownloads") {
+            updated.push_str("\nParallelDownloads = 5\n");
+        }
+        
+        if updated != content {
+            let _ = fs::write(pacman_conf, updated);
+        }
+    }
+
+    // Rank top 10 fastest mirrors from the last 20 latest
+    run_cmd_captured(
+        "reflector",
+        &[
+            "--latest",
+            "20",
+            "--protocol",
+            "https",
+            "--sort",
+            "rate",
+            "--save",
+            "/etc/pacman.d/mirrorlist",
+        ],
+        tx,
+    )?;
+
+    Ok(())
 }
