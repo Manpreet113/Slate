@@ -180,7 +180,15 @@ fn configure_user(config: &UserInfo) -> Result<()> {
     let sudoers_file = "/etc/sudoers";
     if Path::new(sudoers_file).exists() {
         let sudoers = fs::read_to_string(sudoers_file)?;
-        let new_sudoers = sudoers.replace("# %wheel ALL=(ALL:ALL) ALL", "%wheel ALL=(ALL:ALL) ALL");
+        let mut new_sudoers = sudoers.replace("# %wheel ALL=(ALL:ALL) ALL", "%wheel ALL=(ALL:ALL) ALL");
+        
+        // Ensure sudoers.d is included
+        if !new_sudoers.contains("@includedir /etc/sudoers.d") && !new_sudoers.contains("#includedir /etc/sudoers.d") {
+            new_sudoers.push_str("\n@includedir /etc/sudoers.d\n");
+        } else {
+            new_sudoers = new_sudoers.replace("#includedir /etc/sudoers.d", "@includedir /etc/sudoers.d");
+        }
+        
         fs::write(sudoers_file, new_sudoers)?;
     }
 
@@ -600,42 +608,22 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn run_command_as_user(config: &UserInfo, user_home: &str, cmd: &str, args: &[&str]) -> Result<()> {
-    println!(
-        "    $ sudo -H -u {} -- {} {}",
-        config.username,
-        cmd,
-        args.join(" ")
-    );
+fn run_command_as_user(config: &UserInfo, _user_home: &str, cmd: &str, args: &[&str]) -> Result<()> {
+    println!("    $ runuser -l {} -c \"{} {}\"", config.username, cmd, args.join(" "));
 
-    let mut child = Command::new("sudo");
+    let full_cmd = format!("{} {}", cmd, args.join(" "));
+    let mut child = Command::new("runuser");
     child
-        .env("HOME", user_home)
-        .arg("-H")
-        .arg("-u")
+        .arg("-l")
         .arg(&config.username)
-        .arg("--")
-        .arg(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .arg("-c")
+        .arg(&full_cmd)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
 
-    let output = child
-        .output()
-        .with_context(|| format!("Failed to run {} as {}", cmd, config.username))?;
-
-    if !output.status.success() {
-        let stderr = sanitize_for_tui(&String::from_utf8_lossy(&output.stderr));
-        let stderr = stderr.trim().to_string();
-        if stderr.is_empty() {
-            bail!("Command failed: {} (as {})", cmd, config.username);
-        }
-        bail!(
-            "Command failed: {} (as {}): {}",
-            cmd,
-            config.username,
-            stderr
-        );
+    let status = child.status().context("Failed to run command as user")?;
+    if !status.success() {
+        bail!("Command failed: {} (exit {})", cmd, status.code().unwrap_or(-1));
     }
 
     Ok(())
