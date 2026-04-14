@@ -20,6 +20,7 @@ const SHELL_ARCHIVE_URL: &str =
     "https://github.com/manpreet113/shell/archive/refs/heads/main.tar.gz";
 const SHELL_REPO_DIR: &str = "/tmp/slate-shell";
 const AX_BINARY_URL: &str = "https://github.com/manpreet113/ax/releases/latest/download/ax";
+const TEMP_AX_SUDOERS_FILE: &str = "/etc/sudoers.d/10-slate-ax";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallPlan {
@@ -831,9 +832,7 @@ impl ChrootContext {
             parse_requirements_file(&Path::new(SHELL_REPO_DIR).join("requirements.txt"))
                 .context("Failed to parse shell requirements")?;
         let packages = merged_package_plan(&requirements);
-        let mut args = vec!["-S", "--needed", "--noconfirm"];
-        args.extend(packages.iter().map(String::as_str));
-        run_simple("pacman", &args)?;
+        install_packages_with_ax(&self.plan.username, &self.target_home(), &packages)?;
         Ok(())
     }
 
@@ -887,7 +886,7 @@ impl ChrootContext {
     }
 
     fn desktop_finalize(&self) -> Result<()> {
-        let user_home = PathBuf::from(format!("/home/{}", self.plan.username));
+        let user_home = self.target_home();
         fs::write(
             user_home.join(".zprofile"),
             "if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]] && command -v Hyprland >/dev/null; then\n  exec Hyprland\nfi\n",
@@ -910,6 +909,10 @@ impl ChrootContext {
     fn write_hostname(&self) -> Result<()> {
         fs::write("/etc/hostname", format!("{}\n", self.plan.hostname))?;
         Ok(())
+    }
+
+    fn target_home(&self) -> PathBuf {
+        PathBuf::from(format!("/home/{}", self.plan.username))
     }
 
     fn write_locale(&self) -> Result<()> {
@@ -1225,10 +1228,8 @@ impl RepairContext {
         let requirements =
             parse_requirements_file(&Path::new(SHELL_REPO_DIR).join("requirements.txt"))?;
         let packages = merged_package_plan(&requirements);
-        let mut args = vec!["-S", "--needed", "--noconfirm"];
-        args.extend(packages.iter().map(String::as_str));
-        run_simple("pacman", &args)?;
         fetch_ax_binary()?;
+        install_packages_with_ax(&self.target.username, &self.target.home, &packages)?;
         Ok(())
     }
 
@@ -1743,6 +1744,51 @@ fn fetch_ax_binary() -> Result<()> {
     )?;
     run_simple("chmod", &["+x", "/usr/local/bin/ax"])?;
     Ok(())
+}
+
+fn install_packages_with_ax(username: &str, user_home: &Path, packages: &[String]) -> Result<()> {
+    if packages.is_empty() {
+        return Ok(());
+    }
+
+    fetch_ax_binary()?;
+    let sudoers_rule = format!("{} ALL=(ALL) NOPASSWD: ALL\n", username);
+    fs::write(TEMP_AX_SUDOERS_FILE, sudoers_rule)?;
+    fs::set_permissions(TEMP_AX_SUDOERS_FILE, fs::Permissions::from_mode(0o440))?;
+
+    let mut args = vec!["-S", "--needed", "--noconfirm"];
+    args.extend(packages.iter().map(String::as_str));
+
+    let result = run_command_as_user(username, user_home, "ax", &args);
+    let cleanup = fs::remove_file(TEMP_AX_SUDOERS_FILE);
+    if let Err(err) = cleanup {
+        bail!("Failed to remove temporary ax sudoers file: {}", err);
+    }
+    result
+}
+
+fn run_command_as_user(username: &str, user_home: &Path, cmd: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new("runuser")
+        .arg("-u")
+        .arg(username)
+        .arg("--")
+        .arg("env")
+        .arg(format!("HOME={}", user_home.display()))
+        .arg(cmd)
+        .args(args)
+        .status()
+        .with_context(|| format!("Failed to run {} as {}", cmd, username))?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    bail!(
+        "Command failed: {} as {} (exit {})",
+        cmd,
+        username,
+        status.code().unwrap_or(-1)
+    )
 }
 
 fn write_user_shell_files(home: &Path) -> Result<()> {
