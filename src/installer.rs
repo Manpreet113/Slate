@@ -13,7 +13,8 @@ pub const TARGET_ROOT: &str = "/mnt";
 pub const TARGET_PLAN_PATH: &str = "/mnt/etc/slate/install-plan.json";
 const TARGET_CHECKPOINT_PATH: &str = "/mnt/etc/slate/checkpoint.json";
 const HOST_PLAN_PATH: &str = "/tmp/slate-install-plan.json";
-const SHELL_REPO_URL: &str = "https://github.com/manpreet113/shell.git";
+const SHELL_ARCHIVE_URL: &str =
+    "https://github.com/manpreet113/shell/archive/refs/heads/main.tar.gz";
 const SHELL_REPO_DIR: &str = "/tmp/slate-shell";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,8 +245,8 @@ impl InstallContext {
             "arch-chroot",
             "bootctl",
             "systemctl",
-            "git",
             "curl",
+            "tar",
         ];
         for tool in tools {
             require_command(tool)?;
@@ -401,7 +402,6 @@ impl InstallContext {
             "sudo",
             "networkmanager",
             "systemd",
-            "git",
             "curl",
             "zsh",
             "bootctl",
@@ -815,10 +815,7 @@ impl ChrootContext {
         if Path::new(SHELL_REPO_DIR).exists() {
             fs::remove_dir_all(SHELL_REPO_DIR).context("Failed to clean shell repo cache")?;
         }
-        run_simple(
-            "git",
-            &["clone", "--depth=1", SHELL_REPO_URL, SHELL_REPO_DIR],
-        )?;
+        fetch_repo_archive(SHELL_ARCHIVE_URL, Path::new(SHELL_REPO_DIR))?;
 
         let user_home = PathBuf::from(format!("/home/{}", self.plan.username));
         let config_dst = user_home.join(".config");
@@ -922,6 +919,45 @@ fn run_simple(cmd: &str, args: &[&str]) -> Result<()> {
         bail!("Command failed: {}", cmd);
     }
     bail!("Command failed: {}: {}", cmd, stderr)
+}
+
+fn fetch_repo_archive(url: &str, target_dir: &Path) -> Result<()> {
+    let archive_path = Path::new("/tmp/slate-shell.tar.gz");
+    if archive_path.exists() {
+        fs::remove_file(archive_path).context("Failed to remove stale shell archive")?;
+    }
+    if target_dir.exists() {
+        fs::remove_dir_all(target_dir).with_context(|| {
+            format!(
+                "Failed to remove existing shell directory at {}",
+                target_dir.display()
+            )
+        })?;
+    }
+
+    run_simple(
+        "curl",
+        &[
+            "-L",
+            "--fail",
+            url,
+            "-o",
+            archive_path.to_string_lossy().as_ref(),
+        ],
+    )?;
+    fs::create_dir_all(target_dir)
+        .with_context(|| format!("Failed to create {}", target_dir.display()))?;
+    run_simple(
+        "tar",
+        &[
+            "-xzf",
+            archive_path.to_string_lossy().as_ref(),
+            "--strip-components=1",
+            "-C",
+            target_dir.to_string_lossy().as_ref(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn run_with_input(cmd: &str, args: &[&str], input: &str) -> Result<()> {
