@@ -26,6 +26,7 @@ pub fn chroot_stage() -> Result<()> {
     configure_tools(&user_info)?;
     configure_post_services()?;
     configure_boot()?;
+    setup_autostart(&user_info)?;
 
     Ok(())
 }
@@ -221,14 +222,6 @@ ExecStart=-/usr/bin/agetty --autologin {} --noclear %I $TERM
         "/etc/systemd/system/getty@tty1.service.d/override.conf",
         autologin_override,
     )?;
-
-    let zprofile = r#"
-# slate-desktop: auto-start hyprland on tty1
-if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
-  exec Hyprland
-fi
-"#;
-    fs::write(format!("{}/.zprofile", user_home), zprofile)?;
 
     fs::create_dir_all(format!("{}/.config", user_home))?;
     fs::write(
@@ -609,15 +602,15 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
 }
 
 fn run_command_as_user(config: &UserInfo, _user_home: &str, cmd: &str, args: &[&str]) -> Result<()> {
-    println!("    $ runuser -l {} -c \"{} {}\"", config.username, cmd, args.join(" "));
+    println!("    $ runuser -u {} -- {} {}", config.username, cmd, args.join(" "));
 
-    let full_cmd = format!("{} {}", cmd, args.join(" "));
     let mut child = Command::new("runuser");
     child
-        .arg("-l")
+        .arg("-u")
         .arg(&config.username)
-        .arg("-c")
-        .arg(&full_cmd)
+        .arg("--")
+        .arg(cmd)
+        .args(args)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
@@ -625,6 +618,28 @@ fn run_command_as_user(config: &UserInfo, _user_home: &str, cmd: &str, args: &[&
     if !status.success() {
         bail!("Command failed: {} (exit {})", cmd, status.code().unwrap_or(-1));
     }
+
+    Ok(())
+}
+
+fn setup_autostart(config: &UserInfo) -> Result<()> {
+    println!("  > Setting up Hyprland auto-start...");
+
+    let user_home = format!("/home/{}", config.username);
+    let zprofile = r#"
+# slate-desktop: auto-start hyprland on tty1
+if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]] && command -v Hyprland >/dev/null; then
+  exec Hyprland
+fi
+"#;
+    fs::write(format!("{}/.zprofile", user_home), zprofile)?;
+    run_command(
+        "chown",
+        &[
+            &format!("{}:{}", config.username, config.username),
+            &format!("{}/.zprofile", user_home),
+        ],
+    )?;
 
     Ok(())
 }
