@@ -1,8 +1,10 @@
 use crate::system;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
@@ -16,6 +18,7 @@ const HOST_PLAN_PATH: &str = "/tmp/slate-install-plan.json";
 const SHELL_ARCHIVE_URL: &str =
     "https://github.com/manpreet113/shell/archive/refs/heads/main.tar.gz";
 const SHELL_REPO_DIR: &str = "/tmp/slate-shell";
+const AX_BINARY_URL: &str = "https://github.com/manpreet113/ax/releases/latest/download/ax";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallPlan {
@@ -439,6 +442,18 @@ impl InstallContext {
             Some(Duration::from_secs(10)),
             false,
         )?;
+        runner.run(
+            "curl",
+            &["-L", "--fail", AX_BINARY_URL, "-o", "/mnt/usr/local/bin/ax"],
+            Some(Duration::from_secs(120)),
+            false,
+        )?;
+        runner.run(
+            "chmod",
+            &["+x", "/mnt/usr/local/bin/ax"],
+            Some(Duration::from_secs(10)),
+            false,
+        )?;
         Ok(())
     }
 
@@ -754,12 +769,28 @@ impl ChrootContext {
 
         let sudoers = "/etc/sudoers";
         let content = fs::read_to_string(sudoers).context("Failed to read sudoers")?;
-        let updated = if content.contains("%wheel ALL=(ALL:ALL) ALL") {
+        let mut updated = if content.contains("%wheel ALL=(ALL:ALL) ALL") {
             content
         } else {
             content.replace("# %wheel ALL=(ALL:ALL) ALL", "%wheel ALL=(ALL:ALL) ALL")
         };
+        if !updated.contains("@includedir /etc/sudoers.d")
+            && !updated.contains("#includedir /etc/sudoers.d")
+        {
+            updated.push_str("\n@includedir /etc/sudoers.d\n");
+        } else {
+            updated = updated.replace("#includedir /etc/sudoers.d", "@includedir /etc/sudoers.d");
+        }
         fs::write(sudoers, updated)?;
+        fs::create_dir_all("/etc/sudoers.d")?;
+        fs::write(
+            format!("/etc/sudoers.d/10-{}", self.plan.username),
+            format!("{} ALL=(ALL:ALL) ALL\n", self.plan.username),
+        )?;
+        fs::set_permissions(
+            format!("/etc/sudoers.d/10-{}", self.plan.username),
+            fs::Permissions::from_mode(0o440),
+        )?;
         Ok(())
     }
 
@@ -784,47 +815,19 @@ impl ChrootContext {
     }
 
     fn desktop_packages(&self) -> Result<()> {
-        let packages = [
-            "hyprland",
-            "hyprlock",
-            "hypridle",
-            "xdg-desktop-portal-hyprland",
-            "qt6-wayland",
-            "pipewire",
-            "wireplumber",
-            "pipewire-pulse",
-            "pipewire-alsa",
-            "firefox",
-            "starship",
-            "eza",
-            "bat",
-            "zoxide",
-            "fzf",
-            "ripgrep",
-            "network-manager-applet",
-            "blueman",
-            "grim",
-            "slurp",
-            "imagemagick",
-            "upower",
-            "wl-clipboard",
-            "wlsunset",
-            "wtype",
-            "noto-fonts",
-            "noto-fonts-emoji",
-            "ttf-dejavu",
-        ];
+        self.ensure_shell_source()?;
+        let requirements =
+            parse_requirements_file(&Path::new(SHELL_REPO_DIR).join("requirements.txt"))
+                .context("Failed to parse shell requirements")?;
+        let packages = merged_package_plan(&requirements);
         let mut args = vec!["-S", "--needed", "--noconfirm"];
-        args.extend(packages);
+        args.extend(packages.iter().map(String::as_str));
         run_simple("pacman", &args)?;
         Ok(())
     }
 
     fn desktop_assets(&self) -> Result<()> {
-        if Path::new(SHELL_REPO_DIR).exists() {
-            fs::remove_dir_all(SHELL_REPO_DIR).context("Failed to clean shell repo cache")?;
-        }
-        fetch_repo_archive(SHELL_ARCHIVE_URL, Path::new(SHELL_REPO_DIR))?;
+        self.ensure_shell_source()?;
 
         let user_home = PathBuf::from(format!("/home/{}", self.plan.username));
         let config_dst = user_home.join(".config");
@@ -840,6 +843,8 @@ impl ChrootContext {
             fs::create_dir_all(&local_dst)?;
             copy_dir_contents(&local_src, &local_dst)?;
         }
+
+        apply_shell_overrides(&self.plan, &user_home)?;
 
         if !self.plan.git_name.trim().is_empty() {
             fs::write(
@@ -861,6 +866,13 @@ impl ChrootContext {
         )?;
         let _ = fs::remove_dir_all(SHELL_REPO_DIR);
         Ok(())
+    }
+
+    fn ensure_shell_source(&self) -> Result<()> {
+        if Path::new(SHELL_REPO_DIR).exists() {
+            return Ok(());
+        }
+        fetch_repo_archive(SHELL_ARCHIVE_URL, Path::new(SHELL_REPO_DIR))
     }
 
     fn desktop_finalize(&self) -> Result<()> {
@@ -1040,9 +1052,149 @@ fn copy_path(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+fn slate_shell_packages() -> Vec<&'static str> {
+    vec![
+        "hyprland",
+        "quickshell",
+        "hyprlock",
+        "hypridle",
+        "xdg-desktop-portal-hyprland",
+        "qt6-wayland",
+        "pipewire",
+        "wireplumber",
+        "pipewire-pulse",
+        "pipewire-alsa",
+        "firefox",
+        "starship",
+        "eza",
+        "bat",
+        "zoxide",
+        "fzf",
+        "ripgrep",
+        "networkmanager",
+        "network-manager-applet",
+        "blueman",
+        "easyeffects",
+        "grim",
+        "slurp",
+        "imagemagick",
+        "sqlite",
+        "upower",
+        "wl-clipboard",
+        "wlsunset",
+        "wtype",
+        "zbar",
+        "glib2",
+        "power-profiles-daemon",
+        "ttf-roboto",
+        "ttf-dejavu",
+        "ttf-liberation",
+        "noto-fonts",
+        "noto-fonts-cjk",
+        "noto-fonts-emoji",
+        "ttf-nerd-fonts-symbols",
+        "gpu-screen-recorder",
+        "adw-gtk-theme",
+    ]
+}
+
+fn merged_package_plan(shell_requirements: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut packages = Vec::new();
+
+    for pkg in slate_shell_packages()
+        .into_iter()
+        .map(|pkg| pkg.to_string())
+        .chain(shell_requirements.iter().cloned())
+    {
+        if seen.insert(pkg.clone()) {
+            packages.push(pkg);
+        }
+    }
+
+    packages
+}
+
+fn parse_requirements_file(path: &Path) -> Result<Vec<String>> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read requirements file at {}", path.display()))?;
+    Ok(parse_requirements(&raw))
+}
+
+fn parse_requirements(raw: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut packages = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let normalized = normalize_package_name(trimmed);
+        if seen.insert(normalized.clone()) {
+            packages.push(normalized);
+        }
+    }
+
+    packages
+}
+
+fn normalize_package_name(name: &str) -> String {
+    match name.trim() {
+        "python3" => "python",
+        "pactl" => "libpulse",
+        "fonts-inter" => "inter-font",
+        "fonts-roboto-mono" => "ttf-roboto-mono",
+        "nm-connection-editor" => "network-manager-applet",
+        other => other,
+    }
+    .to_string()
+}
+
+fn apply_shell_overrides(plan: &InstallPlan, user_home: &Path) -> Result<()> {
+    let input_conf = user_home.join(".config/hypr/conf.d/input.conf");
+    if input_conf.exists() {
+        let content = fs::read_to_string(&input_conf)?;
+        let updated = set_hypr_keymap(&content, &plan.keymap);
+        fs::write(&input_conf, updated)?;
+    }
+    Ok(())
+}
+
+fn set_hypr_keymap(content: &str, keymap: &str) -> String {
+    let mut updated = Vec::new();
+    let mut replaced = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("kb_layout") {
+            let indent_len = line.len() - trimmed.len();
+            let indent = " ".repeat(indent_len);
+            updated.push(format!("{indent}kb_layout    = {keymap}"));
+            replaced = true;
+        } else {
+            updated.push(line.to_string());
+        }
+    }
+
+    if !replaced {
+        updated.push(format!("    kb_layout    = {keymap}"));
+    }
+
+    let mut rendered = updated.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_for_log, Checkpoint, InstallPlan, StageId};
+    use super::{
+        normalize_package_name, parse_requirements, sanitize_for_log, set_hypr_keymap, Checkpoint,
+        InstallPlan, StageId,
+    };
 
     #[test]
     fn install_plan_validation_rejects_missing_fields() {
@@ -1078,5 +1230,41 @@ mod tests {
         let decoded: Checkpoint = serde_json::from_str(&serialized).unwrap();
         assert_eq!(decoded.active_stage, Some(StageId::Bootstrap));
         assert_eq!(decoded.completed_stages.len(), 2);
+    }
+
+    #[test]
+    fn parses_requirements_and_normalizes_known_aliases() {
+        let parsed = parse_requirements(
+            r#"
+            quickshell
+            python3
+            nm-connection-editor
+            fonts-inter
+            fonts-roboto-mono
+            python3
+            "#,
+        );
+
+        assert_eq!(
+            parsed,
+            vec![
+                "quickshell",
+                "python",
+                "network-manager-applet",
+                "inter-font",
+                "ttf-roboto-mono",
+            ]
+        );
+        assert_eq!(normalize_package_name("pactl"), "libpulse");
+    }
+
+    #[test]
+    fn rewrites_hypr_keymap_in_place() {
+        let updated = set_hypr_keymap(
+            "input {\n    kb_layout    = us\n    follow_mouse = 1\n}\n",
+            "de",
+        );
+        assert!(updated.contains("kb_layout    = de"));
+        assert!(!updated.contains("kb_layout    = us"));
     }
 }
