@@ -731,7 +731,7 @@ mod tests {
                 "quickshell",
                 "python",
                 "network-manager-applet",
-                "ttf-inter",
+                "inter-font",
                 "ttf-roboto-mono",
             ]
         );
