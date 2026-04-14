@@ -1504,6 +1504,8 @@ fn slate_shell_packages() -> Vec<&'static str> {
         "ttf-nerd-fonts-symbols",
         "gpu-screen-recorder",
         "adw-gtk-theme",
+        "cpio",
+        "cmake"
     ]
 }
 
