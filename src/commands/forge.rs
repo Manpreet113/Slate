@@ -435,16 +435,22 @@ fn optimize_mirrors(tx: &Sender<InstallMsg>) -> Result<()> {
         }
     }
 
-    // Rank top 10 fastest mirrors from the last 20 latest
+    // Turbo-rank top 10 mirrors with high parallelism and regional focus
     run_cmd_captured(
         "reflector",
         &[
             "--latest",
-            "20",
+            "10",
             "--protocol",
             "https",
             "--sort",
             "rate",
+            "--threads",
+            "10",
+            "--download-timeout",
+            "10",
+            "--country",
+            "India,Singapore,United States",
             "--save",
             "/etc/pacman.d/mirrorlist",
         ],
