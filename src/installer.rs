@@ -709,6 +709,7 @@ impl ChrootContext {
 
     fn base_config(&self) -> Result<()> {
         fs::create_dir_all("/etc/slate")?;
+        self.ensure_pacman_keyring()?;
         self.write_hostname()?;
         self.write_locale()?;
         self.write_timezone()?;
@@ -718,6 +719,13 @@ impl ChrootContext {
         )?;
         run_simple("systemctl", &["enable", "NetworkManager"])?;
         run_simple("systemctl", &["enable", "systemd-timesyncd"])?;
+        Ok(())
+    }
+
+    fn ensure_pacman_keyring(&self) -> Result<()> {
+        run_simple("pacman-key", &["--init"])?;
+        run_simple("pacman-key", &["--populate", "archlinux"])?;
+        run_simple("pacman", &["-Sy", "--noconfirm", "archlinux-keyring"])?;
         Ok(())
     }
 
