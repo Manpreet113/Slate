@@ -172,6 +172,7 @@ struct InstallContext {
     sink: EventSink,
     checkpoint: Checkpoint,
     current_stage: Option<StageId>,
+    mounts: MountTable,
 }
 
 impl InstallContext {
@@ -181,6 +182,7 @@ impl InstallContext {
             sink,
             checkpoint: Checkpoint::default(),
             current_stage: None,
+            mounts: MountTable::default(),
         }
     }
 
@@ -324,8 +326,7 @@ impl InstallContext {
         )?;
 
         fs::create_dir_all(TARGET_ROOT)?;
-        let mut mounts = MountTable::default();
-        mounts.mount(
+        self.mounts.mount(
             &runner,
             &root,
             TARGET_ROOT,
@@ -341,8 +342,8 @@ impl InstallContext {
             )?;
         }
 
-        mounts.unmount(&runner, TARGET_ROOT)?;
-        mounts.mount(
+        self.mounts.unmount(&runner, TARGET_ROOT)?;
+        self.mounts.mount(
             &runner,
             &root,
             TARGET_ROOT,
@@ -360,25 +361,25 @@ impl InstallContext {
             fs::create_dir_all(dir)?;
         }
 
-        mounts.mount(
+        self.mounts.mount(
             &runner,
             &root,
             "/mnt/home",
             &["-o", "rw,noatime,compress=zstd,space_cache=v2,subvol=@home"],
         )?;
-        mounts.mount(
+        self.mounts.mount(
             &runner,
             &root,
             "/mnt/var/log",
             &["-o", "rw,noatime,compress=zstd,space_cache=v2,subvol=@log"],
         )?;
-        mounts.mount(
+        self.mounts.mount(
             &runner,
             &root,
             "/mnt/var/cache/pacman/pkg",
             &["-o", "rw,noatime,compress=zstd,space_cache=v2,subvol=@pkg"],
         )?;
-        mounts.mount(
+        self.mounts.mount(
             &runner,
             &root,
             "/mnt/.snapshots",
@@ -387,7 +388,7 @@ impl InstallContext {
                 "rw,noatime,compress=zstd,space_cache=v2,subvol=@snapshots",
             ],
         )?;
-        mounts.mount(&runner, &efi, "/mnt/boot", &[])?;
+        self.mounts.mount(&runner, &efi, "/mnt/boot", &[])?;
         Ok(())
     }
 
@@ -475,6 +476,7 @@ impl InstallContext {
 
     fn finalize(&mut self) -> Result<()> {
         self.sink.log("Install finished successfully.");
+        self.mounts.targets.clear();
         Ok(())
     }
 

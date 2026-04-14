@@ -647,6 +647,7 @@ fn render_result(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App) 
 }
 
 fn field_line<'a>(label: &'a str, value: &'a str, selected: bool) -> ListItem<'a> {
+    let marker = if selected { ">" } else { " " };
     let style = if selected {
         Style::default()
             .bg(Color::Rgb(40, 58, 74))
@@ -656,6 +657,7 @@ fn field_line<'a>(label: &'a str, value: &'a str, selected: bool) -> ListItem<'a
         Style::default().fg(Color::Rgb(205, 210, 215))
     };
     ListItem::new(Line::from(vec![
+        Span::styled(format!("{marker} "), style),
         Span::styled(format!("{label:<10} "), style),
         Span::styled(value, style),
     ]))
