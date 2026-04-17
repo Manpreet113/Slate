@@ -422,6 +422,7 @@ impl InstallContext {
             "zsh",
             "intel-ucode",
             "amd-ucode",
+            "libgit2",
         ];
 
         self.sink.log("Bootstrapping base system...");
