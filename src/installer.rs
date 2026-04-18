@@ -733,6 +733,20 @@ impl ChrootContext {
         self.desktop_packages()?;
         self.desktop_assets()?;
         self.desktop_finalize()?;
+        self.auto_login()?;
+        Ok(())
+    }
+
+    fn auto_login(&self) -> Result<()> {
+        let dir = "/etc/systemd/system/getty@tty1.service.d";
+        fs::create_dir_all(dir)?;
+        fs::write(
+            format!("{}/autologin.conf", dir),
+            format!(
+                "[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin {} --noclear %I $TERM\n",
+                self.plan.username
+            ),
+        )?;
         Ok(())
     }
 
